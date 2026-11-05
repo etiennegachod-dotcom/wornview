@@ -12,7 +12,7 @@
                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
 </script>
 <script>
-window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs", mpWasm: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm", mpModel: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" };
+window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs", mpWasm: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm", mpModel: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", mpFaceModel: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" };
 </script>
 <style>
   :root { --bg:#0a0a0a; --panel:rgba(12,12,12,.94); --line:#2a2a2a; --text:#f0f0f0;
@@ -88,6 +88,8 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   .panel-top .btn { min-height:36px; padding:4px 14px; }
   body[data-type=bracelet] .ring-only { display:none; }
   body:not([data-type=bracelet]) .bracelet-only { display:none; }
+  body[data-type=earring] .hand-only { display:none; }
+  body:not([data-type=earring]) .ear-only { display:none; }
   body.demo #btn-cam { opacity:.35; pointer-events:none; }
   #rotate { display:none; position:fixed; inset:0; z-index:9; background:var(--bg); color:var(--text);
             align-items:center; justify-content:center; text-align:center; padding:30px; font-size:14px; }
@@ -131,7 +133,8 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   <button class="btn big" id="btn-start" disabled>Demarrer l'essayage</button>
   <ol class="steps">
     <li>Autorisez la camera, et les capteurs de mouvement (gravite des pampilles).</li>
-    <li>Filmez votre main avec la camera arriere, telephone tenu droit.</li>
+    <li>Bague, bracelet : filmez la main (camera arriere). Boucles d'oreilles : le visage
+      (camera selfie, ou arriere pour filmer quelqu'un), telephone tenu droit.</li>
     <li>La piece ne quitte pas le telephone : rien n'est envoye.</li>
   </ol>
 </section>
@@ -141,7 +144,23 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
 <aside>
   <div class="panel-top"><h3 style="margin:0">Placement</h3>
     <button class="btn ghost" id="btn-close-panel">Fermer</button></div>
-  <div class="row ring-only">
+  <div class="ear-only">
+    <div class="row"><label>Oreilles</label>
+      <select id="earWhich"><option value="both">Les deux (paire)</option>
+        <option value="left">Lobe gauche de la personne</option>
+        <option value="right">Lobe droit de la personne</option></select></div>
+    <div class="row"><label>Orientation de la face (0 = devant, 90 = profil) <span id="earAngle-v"></span></label>
+      <input type="range" id="earAngle" min="0" max="90" step="1"></div>
+    <div class="row"><label>Point de percage : hauteur <span id="earDy-v"></span></label>
+      <input type="range" id="earDy" min="-12" max="12" step="1"></div>
+    <div class="row"><label>Point de percage : avant / arriere <span id="earDz-v"></span></label>
+      <input type="range" id="earDz" min="-12" max="12" step="1"></div>
+    <label class="check"><input type="checkbox" id="earMirror"> Boucle droite en miroir de la gauche</label>
+    <label class="check"><input type="checkbox" id="earSwing"> Boucle libre : pend et balance depuis le lobe</label>
+    <p class="hint">Libre par defaut si la boucle descend de plus de 12 mm sous l'attache (pendants,
+      creoles), fixe pour une puce. Affichez les volumes de masquage (Calibration) pour verifier le lobe.</p>
+  </div>
+  <div class="row ring-only hand-only">
     <label>Doigt</label>
     <div class="fingers">
       <button data-finger="thumb">Pouce</button><button data-finger="index">Index</button>
@@ -149,31 +168,35 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
       <button data-finger="pinky">Auric.</button>
     </div>
   </div>
-  <div class="row ring-only"><label>Position sur la phalange <span id="along-v"></span></label>
+  <div class="row ring-only hand-only"><label>Position sur la phalange <span id="along-v"></span></label>
     <input type="range" id="along" min="0.05" max="0.95" step="0.01"></div>
   <div class="row bracelet-only"><label>Recul vers l'avant-bras <span id="braceletOffset-v"></span></label>
     <input type="range" id="braceletOffset" min="0" max="60" step="1"></div>
-  <div class="row"><label>Rotation autour de l'axe <span id="spin-v"></span></label>
+  <div class="row hand-only"><label>Rotation autour de l'axe <span id="spin-v"></span></label>
     <input type="range" id="spin" min="-180" max="180" step="1"></div>
-  <label class="check"><input type="checkbox" id="flipHead"> Retourner la piece (tete cote paume)</label>
-  <label class="check"><input type="checkbox" id="flipAxis"> Inverser le sens de l'axe</label>
+  <label class="check"><input type="checkbox" id="flipHead"> Retourner la piece (tete cote paume / face arriere)</label>
+  <label class="check hand-only"><input type="checkbox" id="flipAxis"> Inverser le sens de l'axe</label>
 
   <h3>Calibration de la personne</h3>
-  <div class="row"><label>Tour de doigt de la personne <span id="fingerEU-v"></span></label>
+  <div class="row ear-only"><label>Taille de la tete <span id="headScale-v"></span></label>
+    <input type="range" id="headScale" min="0.85" max="1.15" step="0.01"></div>
+  <p class="hint ear-only">Tete moyenne par defaut. Une tete plus grosse que la moyenne fait paraitre
+    la boucle un peu trop grande (8 % de tete = 8 % de boucle) : ajustez si besoin.</p>
+  <div class="row hand-only"><label>Tour de doigt de la personne <span id="fingerEU-v"></span></label>
     <input type="range" id="fingerEU" min="40" max="72" step="0.5"></div>
   <div class="row bracelet-only"><label>Tour de poignet <span id="wristMm-v"></span></label>
     <input type="range" id="wristMm" min="120" max="210" step="1"></div>
-  <div class="row"><label>Reglage fin de l'echelle <span id="handScale-v"></span></label>
+  <div class="row hand-only"><label>Reglage fin de l'echelle <span id="handScale-v"></span></label>
     <input type="range" id="handScale" min="0.8" max="1.25" step="0.01"></div>
-  <label class="check"><input type="checkbox" id="showGhost"> Afficher la main virtuelle</label>
-  <p class="hint">La taille de la main est calee automatiquement sur le tour de doigt
+  <label class="check"><input type="checkbox" id="showGhost"> Afficher les volumes de masquage (main / tete)</label>
+  <p class="hint hand-only">La taille de la main est calee automatiquement sur le tour de doigt
     (par defaut : la taille de la bague). Si la personne a une autre taille, reglez son tour
     de doigt. L'echelle n'est qu'un reglage fin : affichez la main virtuelle et ajustez-la si
     le doigt bleu est plus large ou plus fin que le vrai doigt.</p>
-  <label class="check"><input type="checkbox" id="measure"> Mesurer le doigt dans l'image</label>
-  <p class="hint">Affine la taille et centre la bague sur le doigt filme. En haut de l'ecran :
+  <label class="check hand-only"><input type="checkbox" id="measure"> Mesurer le doigt dans l'image</label>
+  <p class="hint hand-only">Affine la taille et centre la bague sur le doigt filme. En haut de l'ecran :
     "doigt mesure" ou "estime" (doigts serres, fond de la couleur de la peau).</p>
-  <label class="check"><input type="checkbox" id="flipHand"> Main droite / gauche inversee</label>
+  <label class="check hand-only"><input type="checkbox" id="flipHand"> Main droite / gauche inversee</label>
 
   <h3>Rendu</h3>
   <div class="row"><label>Exposition <span id="exposure-v"></span></label>
@@ -199,11 +222,12 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
 // =====================================================================
 //  MSK_WornView - page d'essayage SMARTPHONE (developpement produit)
 //
-//  Camera du telephone -> MediaPipe (21 points de la main) -> pose 3D de
-//  la main en metres -> bague sur la phalange / bracelet au poignet ->
-//  rendu PBR three.js par-dessus la video, cache par un "fantome" de la
-//  main. Les pampilles (noeuds PEND_*) balancent sous la VRAIE gravite,
-//  lue sur les capteurs du telephone.
+//  Camera du telephone -> MediaPipe (21 points de la main, ou 468 points
+//  du visage) -> pose 3D en metres -> bague sur la phalange, bracelet au
+//  poignet, boucles aux lobes -> rendu PBR three.js par-dessus la video,
+//  cache par un "fantome" (main, ou tete + cou + lobes). Les pampilles
+//  (noeuds PEND_*) et les boucles pendantes balancent sous la VRAIE
+//  gravite, lue sur les capteurs du telephone.
 //
 //  La piece (.glb exporte par Rhino) est ouverte depuis les fichiers du
 //  telephone : elle n'est envoyee nulle part, tout reste sur l'appareil.
@@ -644,6 +668,186 @@ function measureFinger(frame, A, B, t, hw0) {
     shift: (c[0] - c0[0]) * n[0] + (c[1] - c0[1]) * n[1], valid: widths.length, spread };
 }
 
+// ------------------------------------------------------------ visage (boucles d'oreilles)
+// Visage moyen de MediaPipe (geometry_pipeline_metadata_landmarks), en cm :
+// les 33 points stables qu'il utilise lui-meme pour recaler la tete.
+const FACE_IDX = [4,6,10,33,54,67,117,119,121,127,129,132,133,136,143,147,198,205,263,284,297,346,348,350,356,358,361,362,365,372,376,420,425];
+const FACE_CANON = [[0.0000,-0.4632,7.5866],[0.0000,2.4733,5.7886],[0.0000,8.2618,4.4815],[-4.4459,2.6640,3.1734],[-6.2793,6.6154,1.4259],[-3.5240,8.0060,3.7292],[-5.2587,0.9458,2.9743],[-3.3007,0.8616,3.8728],[-1.8207,1.4680,4.2241],[-7.7431,2.3650,-2.0052],[-1.7858,-0.9783,4.8505],[-7.2709,-2.8909,-2.2525],[-1.8564,2.5852,3.7579],[-5.0853,-7.1786,0.7147],[-6.4076,2.2360,1.5608],[-6.2349,-1.9444,1.6635],[-1.2468,0.2303,5.6810],[-3.8329,-1.5373,4.1377],[4.4459,2.6640,3.1734],[6.2793,6.6154,1.4259],[3.5240,8.0060,3.7292],[5.2587,0.9458,2.9743],[3.3007,0.8616,3.8728],[1.8207,1.4680,4.2241],[7.7431,2.3650,-2.0052],[1.7858,-0.9783,4.8505],[7.2709,-2.8909,-2.2525],[1.8564,2.5852,3.7579],[5.0853,-7.1786,0.7147],[6.4076,2.2360,1.5608],[6.2349,-1.9444,1.6635],[1.2468,0.2303,5.6810],[3.8329,-1.5373,4.1377]];
+
+/**
+ * Point de percage du lobe, dans le repere du visage moyen (cm) : x vers la
+ * gauche de la personne, y en haut, z vers l'avant (bout du nez z = 7,5).
+ * Les bords du visage (devant l'oreille) sont a x = +-7,66, y = 0,67,
+ * z = -2,44 ; le lobe est ~2 cm sous le tragus et ~1,5 cm en arriere de
+ * l'angle haut de la machoire (point 132 : y = -2,89, z = -2,25).
+ */
+const LOBE_CANON = { x: 7.8, y: -2.1, z: -3.9 };
+
+// Rotation optimale (Kabsch / Horn) par quaternion : matrice symetrique 4x4,
+// plus grand vecteur propre par iterations de la puissance (pas de SVD).
+function bestRotation(A, B) {
+  // A, B : listes de points centres ; renvoie R (3x3) minimisant |R A - B|
+  let Sxx = 0, Sxy = 0, Sxz = 0, Syx = 0, Syy = 0, Syz = 0, Szx = 0, Szy = 0, Szz = 0;
+  for (let i = 0; i < A.length; i++) {
+    const a = A[i], b = B[i];
+    Sxx += a[0] * b[0]; Sxy += a[0] * b[1]; Sxz += a[0] * b[2];
+    Syx += a[1] * b[0]; Syy += a[1] * b[1]; Syz += a[1] * b[2];
+    Szx += a[2] * b[0]; Szy += a[2] * b[1]; Szz += a[2] * b[2];
+  }
+  const N = [
+    [Sxx + Syy + Szz, Syz - Szy, Szx - Sxz, Sxy - Syx],
+    [Syz - Szy, Sxx - Syy - Szz, Sxy + Syx, Szx + Sxz],
+    [Szx - Sxz, Sxy + Syx, -Sxx + Syy - Szz, Syz + Szy],
+    [Sxy - Syx, Szx + Sxz, Syz + Szy, -Sxx - Syy + Szz],
+  ];
+  // decalage pour rendre la matrice definie positive, puis puissance
+  let shift = 0;
+  for (let i = 0; i < 4; i++) shift += Math.abs(N[i][0]) + Math.abs(N[i][1]) + Math.abs(N[i][2]) + Math.abs(N[i][3]);
+  let q = [1, 0, 0, 0];
+  for (let it = 0; it < 120; it++) {
+    const r = [0, 0, 0, 0];
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) r[i] += (N[i][j] + (i === j ? shift : 0)) * q[j];
+    const n = Math.hypot(r[0], r[1], r[2], r[3]) || 1;
+    q = r.map((x) => x / n);
+  }
+  const [w, x, y, z] = q;
+  return [
+    [w * w + x * x - y * y - z * z, 2 * (x * y - w * z), 2 * (x * z + w * y)],
+    [2 * (x * y + w * z), w * w - x * x + y * y - z * z, 2 * (y * z - w * x)],
+    [2 * (x * z - w * y), 2 * (y * z + w * x), w * w - x * x - y * y + z * z],
+  ];
+}
+
+const mat3v = (R, v) => [R[0][0] * v[0] + R[0][1] * v[1] + R[0][2] * v[2],
+  R[1][0] * v[0] + R[1][1] * v[1] + R[1][2] * v[2], R[2][0] * v[0] + R[2][1] * v[1] + R[2][2] * v[2]];
+
+/**
+ * POSE DE LA TETE en metres, repere camera (three.js), a partir des points
+ * MediaPipe du visage (x, y normalises ; z a la meme echelle que x).
+ *  headScale : taille de la tete / tete moyenne (reglage fin, 1 par defaut)
+ * Recalage du visage moyen par similitude (Umeyama), puis 3 passes pour la
+ * perspective : les oreilles sont 10 cm en arriere du nez, une projection
+ * "plate" les placerait mal des que la tete tourne.
+ * Renvoie { R, T, D } : P_camera = R * (canon en m) + T ; D = distance.
+ */
+function facePose(lm, cam, headScale = 1.0) {
+  const C = FACE_CANON.map((c) => [c[0] / 100 * headScale, c[1] / 100 * headScale, c[2] / 100 * headScale]);
+  const uv = FACE_IDX.map((i) => tang(lm[i], cam));
+  const zr = FACE_IDX.map((i) => lm[i].z * 2 * cam.tanH);
+  const n = C.length;
+  // 1) depart : projection faible (similitude sur x, y et le z de MediaPipe)
+  const Q = FACE_IDX.map((_, k) => [uv[k][0], uv[k][1], -zr[k]]);
+  const cC = [0, 0, 0], cQ = [0, 0, 0];
+  for (let k = 0; k < n; k++) for (let j = 0; j < 3; j++) { cC[j] += C[k][j] / n; cQ[j] += Q[k][j] / n; }
+  const A = C.map((c) => sub(c, cC)), B = Q.map((q) => sub(q, cQ));
+  let R = bestRotation(A, B);
+  let num = 0, den = 0;
+  for (let k = 0; k < n; k++) { num += dot(mat3v(R, A[k]), B[k]); den += dot(A[k], A[k]); }
+  const D0 = den / Math.max(num, 1e-9);
+  const RcC = mat3v(R, cC);
+  let T = [cQ[0] * D0 - RcC[0], cQ[1] * D0 - RcC[1], -D0 - RcC[2]];
+  // 2) vraie perspective : Gauss-Newton sur l'erreur de reprojection (le z
+  //    de MediaPipe, approximatif, ne sert plus). 6 inconnues : petite
+  //    rotation (gauche) + translation.
+  const resid = (Rm, Tv) => {
+    const r = new Array(2 * n);
+    for (let k = 0; k < n; k++) {
+      const p = add(mat3v(Rm, C[k]), Tv); const z = Math.max(-p[2], 1e-4);
+      r[2 * k] = p[0] / z - uv[k][0]; r[2 * k + 1] = p[1] / z - uv[k][1];
+    }
+    return r;
+  };
+  const rotSmall = (w) => {
+    const t = Math.hypot(w[0], w[1], w[2]);
+    if (t < 1e-12) return [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const k = [w[0] / t, w[1] / t, w[2] / t], c = Math.cos(t), s = Math.sin(t), v = 1 - c;
+    return [[c + k[0] * k[0] * v, k[0] * k[1] * v - k[2] * s, k[0] * k[2] * v + k[1] * s],
+      [k[1] * k[0] * v + k[2] * s, c + k[1] * k[1] * v, k[1] * k[2] * v - k[0] * s],
+      [k[2] * k[0] * v - k[1] * s, k[2] * k[1] * v + k[0] * s, c + k[2] * k[2] * v]];
+  };
+  const mm = (X, Y) => X.map((row) => [0, 1, 2].map((j) => row[0] * Y[0][j] + row[1] * Y[1][j] + row[2] * Y[2][j]));
+  const apply = (dp) => [mm(rotSmall([dp[0], dp[1], dp[2]]), R), [T[0] + dp[3], T[1] + dp[4], T[2] + dp[5]]];
+  const sq = (r) => r.reduce((s, x) => s + x * x, 0);
+  let r0 = resid(R, T), e0 = sq(r0), lam = 1e-3;
+  for (let it = 0; it < 30; it++) {
+    const J = [];                                   // 6 colonnes numeriques
+    for (let j = 0; j < 6; j++) {
+      const h = j < 3 ? 1e-5 : 1e-6 * Math.max(1, -T[2]);
+      const dp = [0, 0, 0, 0, 0, 0]; dp[j] = h;
+      const [Rj, Tj] = apply(dp); const rj = resid(Rj, Tj);
+      J.push(rj.map((x, i) => (x - r0[i]) / h));
+    }
+    const H = [0, 1, 2, 3, 4, 5].map((a) => [0, 1, 2, 3, 4, 5].map((b) => J[a].reduce((s, x, i) => s + x * J[b][i], 0)));
+    const g = [0, 1, 2, 3, 4, 5].map((a) => J[a].reduce((s, x, i) => s + x * r0[i], 0));
+    let improved = false;
+    for (let tries = 0; tries < 6 && !improved; tries++) {
+      const M = H.map((row, a) => row.map((x, b) => x + (a === b ? lam * (H[a][a] + 1e-12) : 0)).concat([-g[a]]));
+      for (let c = 0; c < 6; c++) {                 // Gauss avec pivot
+        let p = c; for (let rr = c + 1; rr < 6; rr++) if (Math.abs(M[rr][c]) > Math.abs(M[p][c])) p = rr;
+        [M[c], M[p]] = [M[p], M[c]];
+        const piv = M[c][c] || 1e-18;
+        for (let rr = 0; rr < 6; rr++) if (rr !== c) { const f = M[rr][c] / piv; for (let k = c; k < 7; k++) M[rr][k] -= f * M[c][k]; }
+      }
+      const dp = M.map((row, c) => row[6] / (row[c] || 1e-18));
+      const [Rn, Tn] = apply(dp); const rn = resid(Rn, Tn); const en = sq(rn);
+      if (en < e0 && Tn[2] < -0.05) { R = Rn; T = Tn; r0 = rn; improved = en < e0 * (1 - 1e-10); e0 = en; lam = Math.max(lam / 4, 1e-7); improved = true; }
+      else lam *= 8;
+    }
+    if (!improved || e0 < 1e-16) break;
+  }
+  // re-orthonormalisation (accumulation de petites rotations)
+  const x0 = unit(R.map((row) => row[0])), y1 = R.map((row) => row[1]);
+  const z0 = unit(cross(x0, y1)), y0 = cross(z0, x0);
+  R = [[x0[0], y0[0], z0[0]], [x0[1], y0[1], z0[1]], [x0[2], y0[2], z0[2]]];
+  return { R, T, D: -T[2], err: Math.sqrt(e0 / n) };
+}
+
+function faceToCamera(pose, canonCm, headScale = 1.0) {
+  const c = [canonCm[0] / 100 * headScale, canonCm[1] / 100 * headScale, canonCm[2] / 100 * headScale];
+  return add(mat3v(pose.R, c), pose.T);
+}
+
+/**
+ * Lobes gauche et droit (repere camera) + axes de la tete.
+ *  adj : decalages de reglage du point de percage (cm) { dy, dz }
+ */
+function earlobes(pose, headScale = 1.0, adj = { dy: 0, dz: 0 }) {
+  const L = LOBE_CANON;
+  const left = faceToCamera(pose, [L.x, L.y + adj.dy, L.z + adj.dz], headScale);
+  const right = faceToCamera(pose, [-L.x, L.y + adj.dy, L.z + adj.dz], headScale);
+  const ax = (v) => unit(mat3v(pose.R, v));
+  return { left, right, xHead: ax([1, 0, 0]), yHead: ax([0, 1, 0]), zHead: ax([0, 0, 1]) };
+}
+
+/**
+ * Repere de la boucle a un lobe. Convention Rhino (vue de face) : Z en haut,
+ * face avant vers -Y, point d'attache a l'origine -> glTF : +Y en haut,
+ * face avant vers +Z. La face avant est tournee de 'angleDeg' depuis l'avant
+ * du visage vers l'exterieur (0 = regarde devant, 90 = plein profil).
+ *  side : +1 lobe gauche de la personne, -1 lobe droit
+ */
+function earPose(e, side, angleDeg) {
+  const a = angleDeg * Math.PI / 180;
+  const Y = e.yHead;
+  const Z = unit(add(mul(e.zHead, Math.cos(a)), mul(e.xHead, side * Math.sin(a))));
+  const X = unit(cross(Y, Z));
+  return { pos: side > 0 ? e.left : e.right, X, Y: cross(Z, X), Z };
+}
+
+/** Suivi du visage lisse (One Euro sur les 33 points utiles) -> pose de tete. */
+class FacePipeline {
+  constructor() { this.reset(); }
+  reset() { this.sm = new LandmarkSmoother(1.0, 6.0); }
+  process(lm, t, cam, headScale = 1.0) {
+    const s = this.sm.apply(FACE_IDX.map((i) => lm[i]), t);
+    const L = [];
+    FACE_IDX.forEach((i, k) => { L[i] = s[k]; });
+    const pose = facePose(L, cam, headScale);
+    if (!pose || !isFinite(pose.D) || pose.D < 0.08 || pose.D > 3) return null;
+    return pose;
+  }
+}
+
 // ------------------------------------------------------------ pendules
 /**
  * Pendule spherique amorti : point (centre de masse de la pampille) relie
@@ -782,7 +986,7 @@ function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0, flex = 0) 
   return { P, img, world, dorsal, label: isRight ? 'Right' : 'Left' };
 }
 
-return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
+return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, FACE_IDX, FACE_CANON, LOBE_CANON, facePose, faceToCamera, earlobes, earPose, FacePipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
 })();
 
 
@@ -798,6 +1002,8 @@ const DEF = {
   showGhost: false, flipHead: false, flipAxis: false, flipHand: false, spin: 0,
   exposure: 1.0, gems: 'sparkle', pendulums: true, damping: 3.0,
   fovLong: 65, facing: 'environment', braceletOffset: 18,
+  // boucles d'oreilles
+  earWhich: 'both', earAngle: 60, earDy: 0, earDz: 0, headScale: 1.0, earMirror: true, earSwing: true,
 };
 let S = { ...DEF };
 try { Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* stockage indisponible */ }
@@ -809,7 +1015,9 @@ const state = {
   fps: 0, frames: 0, fpsT: performance.now(), landmarker: null, stream: null,
   videoTime: -1, lastT: performance.now() / 1000, isRight: true,
   gravity: [0, -9.81, 0], gravitySource: 'supposee', mirrored: false,
+  faceLm: null, mp: null, files: null, pieceR: null, pieceCom: new THREE.Vector3(),
 };
+const isEar = () => !!(state.info && state.info.type === 'earring');
 
 // ------------------------------------------------------------ rendu
 const canvas = $('view');
@@ -858,6 +1066,31 @@ ghost.visible = false;
 
 const ghostMaterial = () => (DEMO ? matSkin : (S.showGhost ? matShow : matHide));
 
+// ------------------------------------------------------------ oreilles
+// Un groupe par lobe (cote +1 = lobe GAUCHE de la personne) :
+//   g (lobe, repere de la boucle) > swing (balancement depuis le lobe)
+//   > holder (miroir du cote droit, retournement) > piece
+// Le lobe (disque juste DERRIERE le point d'attache) cache la tige et
+// l'arriere d'une creole ; la tete et le cou cachent la boucle opposee
+// quand la tete tourne.
+const ears = [1, -1].map((side) => {
+  const g = new THREE.Group(), swing = new THREE.Group(), holder = new THREE.Group();
+  g.add(swing); swing.add(holder); scene.add(g); g.visible = false;
+  const lobe = new THREE.Mesh(sphGeo, matHide); lobe.renderOrder = -1; g.add(lobe);
+  return { side, g, swing, holder, lobe };
+});
+const headG = new THREE.Group();
+headG.matrixAutoUpdate = false;
+scene.add(headG); headG.visible = false;
+// volumes en metres, repere du visage moyen MediaPipe (x gauche de la
+// personne, y haut, z avant). Tete plus etroite que les lobes (x 7,0 cm
+// contre 7,8) : la boucle du cote filme n'est jamais coupee par la tete.
+const headOcc = new THREE.Mesh(sphGeo, matHide);
+headOcc.position.set(0, 0.015, -0.03); headOcc.scale.set(0.070, 0.105, 0.095);
+const neckOcc = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 28, 1, false), matHide);
+neckOcc.position.set(0, -0.12, -0.045); neckOcc.scale.set(0.052, 0.16, 0.052);
+for (const m of [headOcc, neckOcc]) { m.renderOrder = -1; headG.add(m); }
+
 function fingerOf(i) {
   if (i >= 1 && i <= 4) return 'thumb';
   if (i >= 5 && i <= 8) return 'index';
@@ -868,27 +1101,46 @@ function fingerOf(i) {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+// Volumes de masquage : a l'epaisseur REELLE des doigts, et 8 % en retrait
+// de la peau. v1.0 a v1.4 : paume et articulations a 12,5 mm de rayon, plus
+// epaisses que le doigt (8 mm) -> la tete d'une bague posee pres de
+// l'articulation etait coupee (essai iPhone du 05/11/2026). Mieux vaut
+// laisser deviner un millimetre de jonc que tronquer la piece.
+const OCC_INSET = 0.92;
+
 function placeGhost(P, k) {
-  const rF = W.fingerRadiusFromEU(S.fingerEU);
-  const palmR = 0.0125 * k;
+  const rF = W.fingerRadiusFromEU(S.fingerEU) * S.handScale;
+  const palmR = rF * 0.9;              // dos de la main : ~ l'epaisseur d'un doigt au-dessus des articulations
   const mat = ghostMaterial();
-  const radius = new Array(21).fill(palmR);
+  const shrink = (DEMO || S.showGhost) ? 1.0 : OCC_INSET;   // affiche tel quel ; masque en retrait
+  const radius = new Array(21).fill(palmR * shrink);
   W.BONES.forEach(([a, b], j) => {
     const fa = fingerOf(a), fb = fingerOf(b);
     let r = palmR;
     if (fa && fa === fb && !(a === 1 && b === 2)) r = rF * W.FINGER_RATIO[fa];
-    if (a === 1 && b === 2) r = 0.011 * k;
+    if (a === 1 && b === 2) r = rF * W.FINGER_RATIO.thumb;
+    r *= shrink;
     const pa = new THREE.Vector3(...P[a]), pb = new THREE.Vector3(...P[b]);
     const d = pb.clone().sub(pa); const L = d.length();
     const m = bones[j];
     m.material = mat;
+    // Doigts VOISINS : pas de masquage (sauf affichage). Leur profondeur vient
+    // du 3D de MediaPipe, imprecis d'un os a l'autre : leurs volumes passaient
+    // devant la bague et la tronquaient. Seuls le doigt porteur et la paume
+    // masquent (comme sur l'essayage de reference).
+    const worn = (state.info && state.info.type === 'bracelet') ? null : S.finger;
+    m.visible = DEMO || S.showGhost || !fa || fa !== fb || fa === worn;
     m.position.copy(pa).addScaledVector(d, 0.5);
     m.quaternion.setFromUnitVectors(UP, d.normalize());
     m.scale.set(r, L, r);
     if (b > 0) radius[b] = Math.min(radius[b], r);
     if (a > 0 && fa) radius[a] = Math.min(radius[a], r);
   });
-  joints.forEach((m, i) => { m.material = mat; m.position.set(...P[i]); m.scale.setScalar(radius[i]); });
+  const wornIds = new Set((state.info && state.info.type !== 'bracelet') ? (W.FINGERS[S.finger] || []) : []);
+  joints.forEach((m, i) => {
+    m.material = mat; m.position.set(...P[i]); m.scale.setScalar(radius[i]);
+    m.visible = DEMO || S.showGhost || !fingerOf(i) || wornIds.has(i) || [5, 9, 13, 17].includes(i);
+  });
   const e = W.wristEllipse(S.wristMm);
   const bp = W.braceletPose(P, state.isRight, 0);
   const len = 0.15;
@@ -934,14 +1186,41 @@ async function setPiece(buf, fileName, remember) {
   }
   const ex = (gltf.parser && gltf.parser.json && gltf.parser.json.asset && gltf.parser.json.asset.extras)
     || gltf.scene.userData || {};
+  const prevType = state.info ? state.info.type : null;
   if (state.piece) {
-    flipper.remove(state.piece);
+    if (state.piece.parent) state.piece.parent.remove(state.piece);
+    if (state.pieceR && state.pieceR.parent) state.pieceR.parent.remove(state.pieceR);
     state.piece.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    state.pieceR = null;
   }
   state.piece = gltf.scene;
   state.info = { type: ex.type || 'ring', name: ex.name || fileName.replace(/\.glb$/i, ''),
     d_inner_mm: ex.d_inner_mm, eu: ex.eu, exported: ex.exported, wornview: !!ex.tool };
-  flipper.add(state.piece);
+  anchor.visible = false; ghost.visible = false; headG.visible = false;
+  ears.forEach((e) => { e.g.visible = false; });
+  if (isEar()) {
+    // centre de gravite de la boucle (repere de la piece, attache = origine)
+    state.piece.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(state.piece);
+    pieceCentroid(state.piece, state.pieceCom);
+    // libre par defaut si la boucle descend > 12 mm sous l'attache SANS
+    // partie mobile (crochet, dormeuse, creole) ; puce, clou, ou puce +
+    // pampille (c'est la pampille qui balance) : fixe
+    let hasPend = false;
+    state.piece.traverse((o) => { if (/^PEND_/.test(o.name || '')) hasPend = true; });
+    S.earSwing = box.min.y < -0.012 && !hasPend; save();
+    const el = $('earSwing'); if (el) el.checked = S.earSwing;
+    ears[0].holder.add(state.piece);
+    state.pieceR = state.piece.clone(true);
+    ears[1].holder.add(state.pieceR);
+    if (prevType !== 'earring' && S.facing !== 'user') {
+      S.facing = 'user'; save();
+      flash('Boucles : camera selfie (bouton Camera pour filmer quelqu\'un)');
+      if (state.started) startCamera();
+    }
+  } else {
+    flipper.add(state.piece);
+  }
   gemOriginal.clear();
   state.piece.traverse((o) => {
     if (!o.isMesh) return;
@@ -957,31 +1236,58 @@ async function setPiece(buf, fileName, remember) {
   const t = state.info.type;
   // Le tour de doigt de la personne sert a caler l'echelle de la main. Par
   // defaut : la taille de la bague (une bague s'essaie a la bonne taille).
-  if (t !== 'bracelet' && state.info.eu > 30 && state.info.eu < 90) {
+  if (t === 'ring' && state.info.eu > 30 && state.info.eu < 90) {
     S.fingerEU = Math.round(state.info.eu * 2) / 2; save();
     const el = $('fingerEU'); if (el) { el.value = S.fingerEU; el.dispatchEvent(new Event('input')); }
     pipe.reset();
   }
   $('piece-name').textContent = state.info.name;
-  const bits = [t === 'bracelet' ? 'Bracelet' : 'Bague'];
-  if (state.info.d_inner_mm) bits.push(t === 'bracelet' ? `diam. int. ${state.info.d_inner_mm.toFixed(1)} mm`
+  const bits = [t === 'bracelet' ? 'Bracelet' : t === 'earring' ? 'Boucles d\'oreilles' : 'Bague'];
+  if (t === 'earring') bits.push(S.earSwing ? 'pendante' : 'fixe');
+  else if (state.info.d_inner_mm) bits.push(t === 'bracelet' ? `diam. int. ${state.info.d_inner_mm.toFixed(1)} mm`
     : `EU ${(state.info.eu || 0).toFixed(1)}`);
-  if (state.pend.length) bits.push(`${state.pend.length} partie(s) mobile(s)`);
+  const nPend = state.pend.filter((p) => p.kind === 'pend' && p.root === 0).length;
+  if (nPend) bits.push(`${nPend} partie(s) mobile(s)`);
   if (state.info.exported) bits.push(`export ${state.info.exported}`);
   $('piece-info').textContent = bits.join('  -  ');
   document.body.dataset.type = t;
   if (!state.info.wornview) flash('Fichier non exporte par MSK_WornView : position a regler');
   else flash('Piece chargee');
   updateStartPanel();
+  if (state.started && !DEMO) startTracker();
   if (remember) await idbPut('last', { buf, fileName, t: Date.now() });
   return true;
+}
+
+// Centre de gravite approche : centroide des surfaces (triangles ponderes
+// par leur aire), dans le repere de la piece. Une tige ou un fil fin pese
+// peu ; le centre de la boite englobante, lui, serait tire par la tige.
+function pieceCentroid(root, out) {
+  const acc = new THREE.Vector3(); let area = 0;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), ab = new THREE.Vector3(), ac = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  const inv = root.matrixWorld.clone().invert();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+    const pos = o.geometry.attributes.position, idx = o.geometry.index;
+    const M = inv.clone().multiply(o.matrixWorld);
+    const n = idx ? idx.count : pos.count;
+    for (let i = 0; i + 2 < n; i += 3) {
+      const i0 = idx ? idx.getX(i) : i, i1 = idx ? idx.getX(i + 1) : i + 1, i2 = idx ? idx.getX(i + 2) : i + 2;
+      a.fromBufferAttribute(pos, i0).applyMatrix4(M); b.fromBufferAttribute(pos, i1).applyMatrix4(M); c.fromBufferAttribute(pos, i2).applyMatrix4(M);
+      const s = ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() / 2;
+      acc.x += s * (a.x + b.x + c.x) / 3; acc.y += s * (a.y + b.y + c.y) / 3; acc.z += s * (a.z + b.z + c.z) / 3; area += s;
+    }
+  });
+  if (area > 0) out.copy(acc.multiplyScalar(1 / area)); else new THREE.Box3().setFromObject(root).getCenter(out);
+  return out;
 }
 
 async function openFile(file) {
   if (!file) return;
   setStatus('Lecture de ' + file.name + '...');
   const buf = await file.arrayBuffer();
-  if (await setPiece(buf, file.name, true)) setStatus(state.started ? 'Montrez votre main a la camera.' : 'Piece prete. Touchez Demarrer.');
+  if (await setPiece(buf, file.name, true)) setStatus(state.started ? showMsg() : 'Piece prete. Touchez Demarrer.');
 }
 
 function applyGemMode() {
@@ -1004,44 +1310,67 @@ function applyGemMode() {
 function setupPendulums() {
   state.pend = [];
   if (!state.piece) return;
-  const groups = new Map();
-  state.piece.traverse((o) => {
-    const m = /^PEND_(\d+)/.exec(o.name || '');
-    if (!m || !o.isMesh) return;
-    if (!groups.has(m[1])) groups.set(m[1], []);
-    groups.get(m[1]).push(o);
-  });
-  for (const [id, nodes] of groups) {
-    const box = new THREE.Box3();
-    for (const n of nodes) { n.geometry.computeBoundingBox(); box.union(n.geometry.boundingBox); }
-    const com = box.getCenter(new THREE.Vector3());
-    if (com.length() < 1e-6) continue;
-    state.pend.push({ id, nodes, com, rest: nodes.map((n) => n.quaternion.clone()),
-      sim: new W.Pendulum(1, S.damping) });
+  // boucle entiere pendue au lobe (en premier : les pampilles suivent)
+  if (isEar()) {
+    for (const e of ears) {
+      state.pend.push({ kind: 'ear', root: e.side > 0 ? 0 : 1, nodes: [e.swing], com: new THREE.Vector3(),
+        rest: [new THREE.Quaternion()], sim: new W.Pendulum(1, S.damping, 70), ear: e });
+    }
   }
+  const roots = state.pieceR ? [state.piece, state.pieceR] : [state.piece];
+  roots.forEach((root, ri) => {
+    const groups = new Map();
+    root.traverse((o) => {
+      const m = /^PEND_(\d+)/.exec(o.name || '');
+      if (!m || !o.isMesh) return;
+      if (!groups.has(m[1])) groups.set(m[1], []);
+      groups.get(m[1]).push(o);
+    });
+    for (const [id, nodes] of groups) {
+      const box = new THREE.Box3();
+      for (const n of nodes) { n.geometry.computeBoundingBox(); box.union(n.geometry.boundingBox); }
+      const com = box.getCenter(new THREE.Vector3());
+      if (com.length() < 1e-6) continue;
+      state.pend.push({ kind: 'pend', root: ri, id, nodes, com, rest: nodes.map((n) => n.quaternion.clone()),
+        sim: new W.Pendulum(1, S.damping) });
+    }
+  });
 }
 
-const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _qp = new THREE.Quaternion();
-const _s = new THREE.Vector3();
+// Rotation d'une partie mobile autour de son pivot (origine du noeud).
+// La rotation voulue (repere camera) est ramenee dans le repere du parent :
+// juste aussi pour la boucle de droite, posee en MIROIR.
+const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _qd = new THREE.Quaternion();
+const _m1 = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _m3 = new THREE.Matrix4();
 function stepPendulums(dt) {
   for (const p of state.pend) {
     p.nodes.forEach((n, i) => n.quaternion.copy(p.rest[i]));
     const n0 = p.nodes[0];
+    const shown = p.kind === 'ear' ? p.ear.g.visible : (isEar() ? ears[p.root].g.visible : anchor.visible);
+    const on = shown && (p.kind === 'ear' ? S.earSwing : S.pendulums);
+    if (!on || !n0.parent) { p.sim.reset(); continue; }
+    if (p.kind === 'ear') {
+      // centre de gravite de la boucle vu du groupe de balancement
+      p.ear.holder.updateMatrix();
+      p.com.copy(state.pieceCom).applyMatrix4(p.ear.holder.matrix);
+    }
     n0.updateWorldMatrix(true, false);
     const pivot = new THREE.Vector3().setFromMatrixPosition(n0.matrixWorld);
-    const comW = p.com.clone().applyMatrix4(n0.matrixWorld);
-    const rest = comW.clone().sub(pivot);
+    const rest = p.com.clone().applyMatrix4(n0.matrixWorld).sub(pivot);
     const L = rest.length();
-    if (!S.pendulums || L < 1e-6) { p.sim.reset(); continue; }
+    if (L < 1e-6) { p.sim.reset(); continue; }
     p.sim.L = L; p.sim.damping = S.damping;
     const d = p.sim.step(pivot.toArray(), rest.toArray(), state.gravity, dt);
     const qd = W.quatFromTo(rest.toArray(), d);
-    _q.set(qd[0], qd[1], qd[2], qd[3]);
-    n0.parent.getWorldQuaternion(_qp);
+    _qd.set(qd[0], qd[1], qd[2], qd[3]);
+    _m1.makeRotationFromQuaternion(_qd);
     for (const n of p.nodes) {
-      n0.matrixWorld.decompose(_v, n.userData._wq || (n.userData._wq = new THREE.Quaternion()), _s);
-      n.quaternion.copy(_qp.clone().invert().multiply(_q.clone().multiply(n.userData._wq)));
+      _m2.extractRotation(n.parent.matrixWorld);          // rotation (+ miroir) du parent
+      _m3.copy(_m2).invert().multiply(_m1).multiply(_m2);
+      _q.setFromRotationMatrix(_m3);
+      n.quaternion.premultiply(_q);
     }
+    n0.updateMatrixWorld(true);
   }
 }
 
@@ -1101,22 +1430,35 @@ async function startCamera() {
 }
 
 async function startTracker() {
-  if (state.landmarker) return true;
-  setStatus('Chargement du suivi de la main...');
+  const face = isEar();
+  if (face ? state.faceLm : state.landmarker) return true;
+  setStatus(face ? 'Chargement du suivi du visage...' : 'Chargement du suivi de la main...');
   try {
-    const mp = await import(CFG.mpBundle);
-    const files = await mp.FilesetResolver.forVisionTasks(CFG.mpWasm);
-    const make = (delegate) => mp.HandLandmarker.createFromOptions(files, {
-      baseOptions: { modelAssetPath: CFG.mpModel, delegate },
-      runningMode: 'VIDEO', numHands: 1,
-      minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5 });
-    try { state.landmarker = await make('GPU'); } catch (e) { state.landmarker = await make('CPU'); }
+    if (!state.mp) {
+      state.mp = await import(CFG.mpBundle);
+      state.files = await state.mp.FilesetResolver.forVisionTasks(CFG.mpWasm);
+    }
+    const mp = state.mp, files = state.files;
+    const make = face
+      ? (delegate) => mp.FaceLandmarker.createFromOptions(files, {
+        baseOptions: { modelAssetPath: CFG.mpFaceModel, delegate },
+        runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: false,
+        minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5 })
+      : (delegate) => mp.HandLandmarker.createFromOptions(files, {
+        baseOptions: { modelAssetPath: CFG.mpModel, delegate },
+        runningMode: 'VIDEO', numHands: 1,
+        minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5 });
+    let lm;
+    try { lm = await make('GPU'); } catch (e) { lm = await make('CPU'); }
+    if (face) state.faceLm = lm; else state.landmarker = lm;
+    setStatus(showMsg());
     return true;
   } catch (e) {
-    setStatus('Suivi de la main indisponible (' + (e.message || e) + '). Verifiez la connexion internet du telephone.');
+    setStatus((face ? 'Suivi du visage' : 'Suivi de la main') + ' indisponible (' + (e.message || e) + '). Verifiez la connexion internet du telephone.');
     return false;
   }
 }
+const showMsg = () => (isEar() ? 'Montrez votre visage a la camera.' : 'Montrez votre main a la camera.');
 
 // ------------------------------------------------------------ mode demo
 function demoFrame(t) {
@@ -1125,6 +1467,23 @@ function demoFrame(t) {
   const trans = [0.0, -0.075, -(parseFloat(qs.get('demoz')) || 0.33)];
   const H = W.synthHand(rot, trans, cam, true, 1);
   return { img: H.img, world: H.world, label: 'Right' };
+}
+
+function demoFace(t) {
+  // visage moyen pose en perspective (points utiles seulement)
+  const cam = W.camTangents(currentHfov(), camera.aspect);
+  const fy = qs.get('demoyaw');
+  const yaw = fy !== null ? parseFloat(fy) * Math.PI / 180 : 0.75 * Math.sin(t * 0.5), pitch = fy !== null ? 0 : 0.12 * Math.sin(t * 0.8), roll = fy !== null ? 0 : 0.08 * Math.sin(t * 0.6);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), cr = Math.cos(roll), sr = Math.sin(roll);
+  const rv = (v) => { let [x, y, z] = v; [y, z] = [cp * y - sp * z, sp * y + cp * z]; [x, z] = [cy * x + sy * z, -sy * x + cy * z]; [x, y] = [cr * x - sr * y, sr * x + cr * y]; return [x, y, z]; };
+  const T = [0, -0.01, -(parseFloat(qs.get('demoz')) || 0.36)];
+  const lm = [];
+  W.FACE_IDX.forEach((i, k) => {
+    const c = W.FACE_CANON[k];
+    const p = W.add(rv([c[0] / 100, c[1] / 100, c[2] / 100]), T);
+    lm[i] = { x: 0.5 + (p[0] / -p[2]) / (2 * cam.tanH), y: 0.5 - (p[1] / -p[2]) / (2 * cam.tanV), z: 0 };
+  });
+  return { face: lm };
 }
 
 function currentHfov() {
@@ -1192,6 +1551,7 @@ function refineWithFinger(pts, img, cam, t) {
   for (const i of (W.FINGERS[S.finger] || W.LM.RING)) out[i] = W.add(out[i], meas.offset);
   return out;
 }
+const facePipe = new W.FacePipeline();
 function frame() {
   requestAnimationFrame(frame);
   const now = performance.now();
@@ -1199,11 +1559,27 @@ function frame() {
   const dt = Math.min(0.05, t - state.lastT);
   state.lastT = t;
   if (state.paused) { renderer.render(scene, camera); return; }
+  if (isEar()) faceStep(t, now); else handStep(t, now);
+  stepPendulums(dt);
+  renderer.render(scene, camera);
 
+  state.frames++;
+  if (now - state.fpsT > 1000) {
+    state.fps = state.frames * 1000 / (now - state.fpsT); state.frames = 0; state.fpsT = now;
+    $('fps').textContent = state.fps.toFixed(0) + ' i/s';
+  }
+}
+
+function newVideoFrame() {
+  if (!(video.readyState >= 2 && video.currentTime !== state.videoTime)) return false;
+  state.videoTime = video.currentTime;
+  return true;
+}
+
+function handStep(t, now) {
   let det = null;
   if (DEMO) det = demoFrame(t);
-  else if (state.landmarker && video.readyState >= 2 && video.currentTime !== state.videoTime) {
-    state.videoTime = video.currentTime;
+  else if (state.landmarker && newVideoFrame()) {
     let r = null;
     try { r = state.landmarker.detectForVideo(video, now); } catch (e) { r = null; }
     if (r && r.landmarks && r.landmarks.length) {
@@ -1233,17 +1609,69 @@ function frame() {
     anchor.visible = false; ghost.visible = false;
     pipe.reset(); resetMeasure(); state.pend.forEach((p) => p.sim.reset());
     $('hand').textContent = 'aucune main';
-    if (state.started && !DEMO) setStatus('Montrez votre main a la camera.');
+    if (state.started && !DEMO) setStatus(showMsg());
   }
+}
 
-  if (anchor.visible) { anchor.updateMatrixWorld(true); stepPendulums(dt); }
-  renderer.render(scene, camera);
-
-  state.frames++;
-  if (now - state.fpsT > 1000) {
-    state.fps = state.frames * 1000 / (now - state.fpsT); state.frames = 0; state.fpsT = now;
-    $('fps').textContent = state.fps.toFixed(0) + ' i/s';
+function faceStep(t, now) {
+  anchor.visible = false; ghost.visible = false;
+  let lm = null, none = false;
+  if (DEMO) lm = demoFace(t).face;
+  else if (state.faceLm && newVideoFrame()) {
+    let r = null;
+    try { r = state.faceLm.detectForVideo(video, now); } catch (e) { r = null; }
+    if (r && r.faceLandmarks && r.faceLandmarks.length) lm = r.faceLandmarks[0];
+    else if (r) none = true;
   }
+  if (lm) {
+    const cam = W.camTangents(currentHfov(), camera.aspect);
+    const pose = facePipe.process(lm, t, cam, S.headScale);
+    if (pose) {
+      state.lastHand = t;
+      placeEars(pose);
+      $('hand').textContent = `visage - ${(pose.D * 100).toFixed(0)} cm`;
+      if (state.started && !DEMO) setStatus('');
+    }
+  } else if (none && t - state.lastHand > 0.35) {
+    ears.forEach((e) => { e.g.visible = false; });
+    headG.visible = false;
+    facePipe.reset(); state.pend.forEach((p) => p.sim.reset());
+    $('hand').textContent = 'aucun visage';
+    if (state.started && !DEMO) setStatus(showMsg());
+  }
+}
+
+const _hm = new THREE.Matrix4();
+function placeEars(pose) {
+  const e = W.earlobes(pose, S.headScale, { dy: S.earDy / 10, dz: S.earDz / 10 });
+  const mat = ghostMaterial();
+  for (const ear of ears) {
+    const q = W.earPose(e, ear.side, S.earAngle);
+    _m4.makeBasis(new THREE.Vector3(...q.X), new THREE.Vector3(...q.Y), new THREE.Vector3(...q.Z));
+    ear.g.quaternion.setFromRotationMatrix(_m4);
+    ear.g.position.set(...q.pos);
+    ear.g.scale.setScalar(1);
+    ear.g.visible = !!state.piece && (S.earWhich === 'both' || (S.earWhich === 'left') === (ear.side > 0));
+    // cote droit : piece en miroir (paire) ; retournement avant / arriere
+    ear.holder.scale.set(ear.side < 0 && S.earMirror ? -1 : 1, 1, 1);
+    ear.holder.rotation.set(0, S.flipHead ? Math.PI : 0, 0);
+    // lobe : disque de 16 x 20 mm, 3,5 mm d'epaisseur, juste derriere l'attache
+    const k = S.headScale;
+    ear.lobe.material = mat;
+    ear.lobe.position.set(0, 0.002 * k, -0.0025 * k);
+    ear.lobe.scale.set(0.008 * k, 0.010 * k, 0.00175 * k);
+    ear.lobe.visible = true;
+  }
+  // tete + cou
+  const R = pose.R, T = pose.T, k = S.headScale;
+  _hm.set(R[0][0] * k, R[0][1] * k, R[0][2] * k, T[0],
+    R[1][0] * k, R[1][1] * k, R[1][2] * k, T[1],
+    R[2][0] * k, R[2][1] * k, R[2][2] * k, T[2],
+    0, 0, 0, 1);
+  headG.matrix.copy(_hm);
+  headG.matrixWorldNeedsUpdate = true;
+  headOcc.material = mat; neckOcc.material = mat;
+  headG.visible = true;
 }
 
 const _m4 = new THREE.Matrix4();
@@ -1326,6 +1754,14 @@ function buildUI() {
   bindCheck('flipHand', 'flipHand', () => pipe.reset());
   bindCheck('pendulums', 'pendulums');
   bindCheck('measure', 'measure', resetMeasure);
+  bindRange('earAngle', 'earAngle', (v) => `${v.toFixed(0)} deg`);
+  bindRange('earDy', 'earDy', (v) => `${v > 0 ? '+' : ''}${v.toFixed(0)} mm`);
+  bindRange('earDz', 'earDz', (v) => `${v > 0 ? '+' : ''}${v.toFixed(0)} mm`);
+  bindRange('headScale', 'headScale', (v) => `x ${v.toFixed(2)}`);
+  bindCheck('earMirror', 'earMirror');
+  bindCheck('earSwing', 'earSwing');
+  const ew = $('earWhich'); ew.value = S.earWhich;
+  ew.addEventListener('change', () => { S.earWhich = ew.value; save(); });
   const gm = $('gems'); gm.value = S.gems;
   gm.addEventListener('change', () => { S.gems = gm.value; save(); applyGemMode(); });
 
@@ -1344,7 +1780,7 @@ function buildUI() {
   });
   $('btn-cam').addEventListener('click', async () => {
     S.facing = S.facing === 'user' ? 'environment' : 'user'; save();
-    pipe.reset(); await startCamera();
+    pipe.reset(); facePipe.reset(); await startCamera();
   });
   $('btn-reset').addEventListener('click', () => { S = { ...DEF }; save(); location.reload(); });
   if (DEMO) document.body.classList.add('demo');
@@ -1355,11 +1791,11 @@ async function start() {
   if (!state.info) return;
   $('start').hidden = true;
   state.started = true;
-  if (DEMO) { setStatus('Mode demo : main virtuelle (aucune camera).'); return; }
+  if (DEMO) { setStatus('Mode demo : main ou visage virtuel (aucune camera).'); return; }
   await startMotion();                      // demande iPhone : DANS le geste
   const okCam = await startCamera();
   if (!okCam) { $('start').hidden = false; state.started = false; return; }
-  if (await startTracker()) setStatus('Montrez votre main a la camera.');
+  await startTracker();
 }
 
 async function takePhoto() {
@@ -1400,7 +1836,7 @@ async function main() {
   frame();
 }
 
-window.__wv = { state, S, scene, camera, anchor, ghost, W, setPiece, start, meas };
+window.__wv = { state, S, scene, camera, anchor, ghost, W, setPiece, start, meas, ears, headG };
 main();
 
 </script>
