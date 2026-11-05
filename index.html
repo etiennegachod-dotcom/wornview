@@ -151,10 +151,17 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
         <option value="right">Lobe droit de la personne</option></select></div>
     <div class="row"><label>Orientation de la face (0 = devant, 90 = profil) <span id="earAngle-v"></span></label>
       <input type="range" id="earAngle" min="0" max="90" step="1"></div>
-    <div class="row"><label>Point de percage : hauteur <span id="earDy-v"></span></label>
-      <input type="range" id="earDy" min="-12" max="12" step="1"></div>
-    <div class="row"><label>Point de percage : avant / arriere <span id="earDz-v"></span></label>
-      <input type="range" id="earDz" min="-12" max="12" step="1"></div>
+    <div class="row"><label>Lobe</label>
+      <p class="hint" id="lobe-state" style="margin:0 0 8px">Lobe moyen (non cale)</p>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:6px">
+        <button class="btn" id="btn-lobe">Caler : toucher le lobe</button>
+        <button class="btn ghost" id="btn-lobe-reset">Lobe moyen</button></div></div>
+    <p class="hint">Touchez le point de percage sur l'image, tete de 3/4, puis une 2e fois de
+      profil : la boucle s'accroche alors au lobe de CETTE personne, sous tous les angles.</p>
+    <div class="row"><label>Retouche : hauteur <span id="earDy-v"></span></label>
+      <input type="range" id="earDy" min="-25" max="25" step="1"></div>
+    <div class="row"><label>Retouche : avant / arriere <span id="earDz-v"></span></label>
+      <input type="range" id="earDz" min="-25" max="25" step="1"></div>
     <label class="check"><input type="checkbox" id="earMirror"> Boucle droite en miroir de la gauche</label>
     <label class="check"><input type="checkbox" id="earSwing"> Boucle libre : pend et balance depuis le lobe</label>
     <p class="hint">Libre par defaut si la boucle descend de plus de 12 mm sous l'attache (pendants,
@@ -677,11 +684,14 @@ const FACE_CANON = [[0.0000,-0.4632,7.5866],[0.0000,2.4733,5.7886],[0.0000,8.261
 /**
  * Point de percage du lobe, dans le repere du visage moyen (cm) : x vers la
  * gauche de la personne, y en haut, z vers l'avant (bout du nez z = 7,5).
- * Les bords du visage (devant l'oreille) sont a x = +-7,66, y = 0,67,
- * z = -2,44 ; le lobe est ~2 cm sous le tragus et ~1,5 cm en arriere de
- * l'angle haut de la machoire (point 132 : y = -2,89, z = -2,25).
+ * v1.5 : (7,8 ; -2,1 ; -3,9), estime d'apres l'anatomie -> sur le 1er essai
+ * iPhone (tete tournee de 30 deg), boucle 1,5 cm trop en avant et 0,8 cm
+ * trop bas. v1.6 : recale sur cette image (visage MediaPipe recolle au
+ * visage moyen a 3 px pres autour de l'oreille, lobe pointe a la main).
+ * Une seule vue ne separe pas x et z : le calage par l'utilisateur
+ * (toucher le lobe, 2 vues) fixe le lobe de CHAQUE personne.
  */
-const LOBE_CANON = { x: 7.8, y: -2.1, z: -3.9 };
+const LOBE_CANON = { x: 8.0, y: -1.2, z: -5.5 };
 
 // Rotation optimale (Kabsch / Horn) par quaternion : matrice symetrique 4x4,
 // plus grand vecteur propre par iterations de la puissance (pas de SVD).
@@ -811,12 +821,71 @@ function faceToCamera(pose, canonCm, headScale = 1.0) {
  * Lobes gauche et droit (repere camera) + axes de la tete.
  *  adj : decalages de reglage du point de percage (cm) { dy, dz }
  */
-function earlobes(pose, headScale = 1.0, adj = { dy: 0, dz: 0 }) {
-  const L = LOBE_CANON;
+function earlobes(pose, headScale = 1.0, adj = { dy: 0, dz: 0 }, lobe = null) {
+  const L = lobe || LOBE_CANON;
   const left = faceToCamera(pose, [L.x, L.y + adj.dy, L.z + adj.dz], headScale);
   const right = faceToCamera(pose, [-L.x, L.y + adj.dy, L.z + adj.dz], headScale);
   const ax = (v) => unit(mat3v(pose.R, v));
   return { left, right, xHead: ax([1, 0, 0]), yHead: ax([0, 1, 0]), zHead: ax([0, 0, 1]) };
+}
+
+/**
+ * CALAGE DU LOBE : l'utilisateur touche le lobe sur l'image. Le rayon
+ * camera -> point touche est ramene dans le repere du visage moyen (cm),
+ * cote GAUCHE de la personne (le cote droit est mis en miroir).
+ *  tan : [tx, ty] tangentes du point touche ; side : +1 gauche, -1 droit
+ */
+function lobeRay(pose, tan, side, headScale = 1.0) {
+  const Rt = [0, 1, 2].map((j) => [0, 1, 2].map((i) => pose.R[i][j]));
+  const k = 100 / headScale;
+  const o = mat3v(Rt, mul(pose.T, -k));
+  const d = unit(mat3v(Rt, [tan[0], tan[1], -1]));
+  return side > 0 ? { o, d } : { o: [-o[0], o[1], o[2]], d: [-d[0], d[1], d[2]] };
+}
+
+/**
+ * Lobe (cm) a partir des rayons touches. Un rayon : coupe par le plan
+ * x = LOBE_CANON.x (largeur moyenne des lobes). Deux rayons ou plus, vus
+ * sous des angles differents (>= 12 deg) : point le plus proche de tous
+ * les rayons (moindres carres), largeur comprise.
+ * Renvoie { x, y, z, views, spreadDeg } ou null.
+ */
+function lobeFromRays(rays) {
+  if (!rays || !rays.length) return null;
+  let spread = 0;
+  for (let i = 0; i < rays.length; i++) for (let j = i + 1; j < rays.length; j++) {
+    spread = Math.max(spread, Math.acos(Math.min(1, Math.abs(dot(rays[i].d, rays[j].d)))) * 180 / Math.PI);
+  }
+  let p;
+  if (rays.length >= 2 && spread >= 12) {
+    // somme (I - d d^T) p = somme (I - d d^T) o
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0];
+    for (const { o, d } of rays) {
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+        const m = (i === j ? 1 : 0) - d[i] * d[j];
+        A[i][j] += m; b[i] += m * o[j];
+      }
+    }
+    p = solve3(A, b);
+  }
+  if (!p) {
+    // plan x = largeur moyenne ; rayon le plus "de profil" (le mieux conditionne)
+    const r = rays.slice().sort((a, b2) => Math.abs(b2.d[0]) - Math.abs(a.d[0]))[0];
+    if (Math.abs(r.d[0]) < 0.2) return null;
+    const t = (LOBE_CANON.x - r.o[0]) / r.d[0];
+    p = add(r.o, mul(r.d, t));
+  }
+  // garde-fou : un lobe hors de la tete n'est pas un lobe
+  if (!p || p[0] < 5.5 || p[0] > 10.5 || p[1] < -6 || p[1] > 3 || p[2] < -10 || p[2] > 1) return null;
+  return { x: p[0], y: p[1], z: p[2], views: rays.length, spreadDeg: spread };
+}
+
+function solve3(A, b) {
+  const det = (M) => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
+    - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+  const D = det(A);
+  if (Math.abs(D) < 1e-9) return null;
+  return [0, 1, 2].map((c) => det(A.map((row, i) => row.map((v, j) => (j === c ? b[i] : v)))) / D);
 }
 
 /**
@@ -986,7 +1055,7 @@ function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0, flex = 0) 
   return { P, img, world, dorsal, label: isRight ? 'Right' : 'Left' };
 }
 
-return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, FACE_IDX, FACE_CANON, LOBE_CANON, facePose, faceToCamera, earlobes, earPose, FacePipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
+return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, FACE_IDX, FACE_CANON, LOBE_CANON, facePose, faceToCamera, earlobes, lobeRay, lobeFromRays, earPose, FacePipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
 })();
 
 
@@ -1004,6 +1073,7 @@ const DEF = {
   fovLong: 65, facing: 'environment', braceletOffset: 18,
   // boucles d'oreilles
   earWhich: 'both', earAngle: 60, earDy: 0, earDz: 0, headScale: 1.0, earMirror: true, earSwing: true,
+  lobeRays: [],             // calage du lobe : rayons touches (repere du visage, cote gauche)
 };
 let S = { ...DEF };
 try { Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* stockage indisponible */ }
@@ -1017,6 +1087,7 @@ const state = {
   gravity: [0, -9.81, 0], gravitySource: 'supposee', mirrored: false,
   faceLm: null, mp: null, files: null, pieceR: null, pieceCom: new THREE.Vector3(),
 };
+state.lobe = null; state.lastPose = null; state.tapLobe = false;
 const isEar = () => !!(state.info && state.info.type === 'earring');
 
 // ------------------------------------------------------------ rendu
@@ -1643,7 +1714,8 @@ function faceStep(t, now) {
 
 const _hm = new THREE.Matrix4();
 function placeEars(pose) {
-  const e = W.earlobes(pose, S.headScale, { dy: S.earDy / 10, dz: S.earDz / 10 });
+  state.lastPose = pose;
+  const e = W.earlobes(pose, S.headScale, { dy: S.earDy / 10, dz: S.earDz / 10 }, state.lobe);
   const mat = ghostMaterial();
   for (const ear of ears) {
     const q = W.earPose(e, ear.side, S.earAngle);
@@ -1687,6 +1759,41 @@ function placeAnchor(P, isRight) {
   if (S.flipHead) flipper.rotateY(Math.PI);
   if (S.flipAxis) flipper.rotateZ(Math.PI);
   anchor.visible = true;
+}
+
+// ------------------------------------------------------------ calage du lobe
+function updateLobe() {
+  state.lobe = W.lobeFromRays(S.lobeRays);
+  const el = $('lobe-state');
+  if (el) {
+    el.textContent = state.lobe
+      ? `Lobe cale sur la personne (${state.lobe.views} toucher${state.lobe.views > 1 ? 's' : ''}${state.lobe.views > 1 && state.lobe.spreadDeg < 12 ? ', tournez davantage la tete entre deux touchers' : ''})`
+      : 'Lobe moyen (non cale)';
+  }
+}
+function onTapLobe(ev) {
+  if (!state.tapLobe || !isEar()) return;
+  const pose = state.lastPose;
+  if (!pose) return;
+  ev.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  let u = (ev.clientX - r.left) / r.width; const v = (ev.clientY - r.top) / r.height;
+  if (state.mirrored) u = 1 - u;
+  const cam = W.camTangents(currentHfov(), camera.aspect);
+  const tan = [(u - 0.5) * 2 * cam.tanH, -(v - 0.5) * 2 * cam.tanV];
+  // oreille la plus proche du point touche
+  const e = W.earlobes(pose, S.headScale, { dy: 0, dz: 0 }, state.lobe);
+  const dist = (p) => Math.hypot(p[0] / -p[2] - tan[0], p[1] / -p[2] - tan[1]);
+  const side = dist(e.left) <= dist(e.right) ? 1 : -1;
+  const ray = W.lobeRay(pose, tan, side, S.headScale);
+  const rays = S.lobeRays.concat([ray]).slice(-4);
+  const lobe = W.lobeFromRays(rays);
+  state.tapLobe = false;
+  if (!lobe) { setStatus(''); flash('Point refuse : touchez le lobe lui-meme, tete tournee de 3/4'); return; }
+  S.lobeRays = rays; S.earDy = 0; S.earDz = 0; save();
+  for (const id of ['earDy', 'earDz']) { const el = $(id); if (el) { el.value = 0; el.dispatchEvent(new Event('input')); } }
+  updateLobe(); setStatus('');
+  flash(rays.length < 2 ? 'Lobe cale. Tournez la tete et touchez-le une 2e fois pour plus de precision.' : 'Lobe cale (' + rays.length + ' vues)');
 }
 
 // ------------------------------------------------------------ mise en page
@@ -1759,6 +1866,13 @@ function buildUI() {
   bindRange('earDz', 'earDz', (v) => `${v > 0 ? '+' : ''}${v.toFixed(0)} mm`);
   bindRange('headScale', 'headScale', (v) => `x ${v.toFixed(2)}`);
   bindCheck('earMirror', 'earMirror');
+  $('btn-lobe').addEventListener('click', () => {
+    state.tapLobe = true; document.body.classList.remove('panel-open');
+    setStatus('Touchez le LOBE (point de percage) sur l\'image. Meilleur : 2 fois, tete de 3/4 puis de profil.');
+  });
+  $('btn-lobe-reset').addEventListener('click', () => { S.lobeRays = []; save(); updateLobe(); flash('Lobe moyen retabli'); });
+  $('stage').addEventListener('pointerdown', onTapLobe);
+  updateLobe();
   bindCheck('earSwing', 'earSwing');
   const ew = $('earWhich'); ew.value = S.earWhich;
   ew.addEventListener('change', () => { S.earWhich = ew.value; save(); });
