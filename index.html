@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0a0a">
+<title>MSK WornView</title>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+</script>
+<script>
+window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs", mpWasm: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm", mpModel: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" };
+</script>
+<style>
+  :root { --bg:#0a0a0a; --panel:rgba(12,12,12,.94); --line:#2a2a2a; --text:#f0f0f0;
+          --muted:#9a9a9a; --gold:#c9a656; color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* un element masque reste masque, quel que soit son style d'affichage */
+  [hidden] { display:none !important; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+               font-family: -apple-system, Helvetica, Arial, sans-serif; overflow:hidden;
+               overscroll-behavior:none; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #view { display:block; flex:none; }
+  video { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+  header { position:fixed; top:0; left:0; right:0; display:flex; align-items:center; gap:10px;
+           padding:calc(10px + env(safe-area-inset-top)) 14px 14px;
+           background:linear-gradient(rgba(0,0,0,.78), rgba(0,0,0,0)); pointer-events:none; z-index:3; }
+  .brand { font-weight:700; letter-spacing:.24em; font-size:12px; color:var(--gold); }
+  .pinfo { flex:1; min-width:0; }
+  #piece-name { font-size:13px; letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #piece-info { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chip { font-size:10px; color:var(--muted); border:1px solid var(--line); padding:3px 7px;
+          border-radius:20px; background:rgba(0,0,0,.45); white-space:nowrap; }
+  #status { position:fixed; left:50%; bottom:calc(86px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+            z-index:3; background:rgba(0,0,0,.65); padding:7px 12px; border-radius:4px; font-size:12px;
+            color:#ddd; width:max-content; max-width:88vw; text-align:center; }
+  #flash { position:fixed; left:50%; top:calc(70px + env(safe-area-inset-top)); transform:translateX(-50%);
+           z-index:6; background:var(--gold); color:#0a0a0a; padding:7px 14px; border-radius:3px; font-size:12px;
+           max-width:88vw; text-align:center; opacity:0; transition:opacity .25s; pointer-events:none; }
+  #flash.on { opacity:1; }
+  .bar { position:fixed; left:0; right:0; bottom:0; display:grid; grid-template-columns:repeat(5, 1fr); gap:6px;
+         padding:12px 10px calc(12px + env(safe-area-inset-bottom)); z-index:3;
+         background:linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.8)); }
+  button, select { font: inherit; }
+  .btn { display:flex; align-items:center; justify-content:center; text-align:center;
+         background:rgba(0,0,0,.55); color:var(--gold); border:1px solid var(--gold);
+         min-height:44px; padding:6px 4px; border-radius:2px; font-size:10px; letter-spacing:.08em;
+         text-transform:uppercase; cursor:pointer; }
+  .btn.ghost { color:var(--text); border-color:#555; }
+  .btn.big { min-height:52px; font-size:13px; letter-spacing:.14em; width:100%; }
+  .btn:disabled { opacity:.35; }
+  input[type=file] { display:none; }
+  /* ecran de demarrage */
+  #start { position:fixed; inset:0; z-index:8; background:var(--bg); display:flex; flex-direction:column;
+           justify-content:center; padding:24px 22px calc(24px + env(safe-area-inset-bottom)); gap:14px; }
+  #start h1 { margin:0; font-size:15px; letter-spacing:.3em; color:var(--gold); text-align:center; }
+  #start .sub { text-align:center; color:var(--muted); font-size:12px; margin:-6px 0 10px; }
+  .card { border:1px solid var(--line); border-radius:4px; padding:14px; }
+  .card .lab { font-size:10px; letter-spacing:.2em; color:var(--muted); text-transform:uppercase; margin-bottom:6px; }
+  #start-piece { font-size:14px; margin-bottom:12px; word-break:break-all; }
+  .steps { color:var(--muted); font-size:12px; line-height:1.6; margin:0; padding-left:18px; }
+  .desk { display:none; color:#f0c070; font-size:12px; line-height:1.5; text-align:center; }
+  body.desktop .desk { display:block; }
+  /* reglages */
+  aside { position:fixed; left:0; right:0; bottom:0; height:64vh; z-index:7; background:var(--panel);
+          border-top:1px solid var(--line); overflow-y:auto; -webkit-overflow-scrolling:touch;
+          transform:translateY(100%); transition:transform .25s;
+          padding:12px 16px calc(24px + env(safe-area-inset-bottom)); }
+  body.panel-open aside { transform:none; }
+  aside h3 { margin:16px 0 8px; font-size:10px; letter-spacing:.22em; color:var(--gold); font-weight:700; text-transform:uppercase; }
+  .row { margin:10px 0; }
+  .row label { display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px; }
+  .row label span { color:var(--muted); font-variant-numeric: tabular-nums; }
+  input[type=range] { width:100%; accent-color: var(--gold); height:28px; }
+  .check { display:flex; align-items:center; gap:10px; font-size:13px; margin:10px 0; min-height:30px; }
+  .check input { accent-color: var(--gold); width:20px; height:20px; flex:none; }
+  .fingers { display:grid; grid-template-columns: repeat(5, 1fr); gap:4px; }
+  .fingers button { background:transparent; color:var(--text); border:1px solid #444; min-height:40px;
+                    font-size:11px; border-radius:2px; }
+  .fingers button.on { border-color:var(--gold); color:var(--gold); }
+  select { width:100%; background:#151515; color:var(--text); border:1px solid #444; padding:10px; font-size:14px; }
+  .hint { font-size:12px; color:var(--muted); line-height:1.5; margin:6px 0; }
+  .panel-top { display:flex; justify-content:space-between; align-items:center; }
+  .panel-top .btn { min-height:36px; padding:4px 14px; }
+  body[data-type=bracelet] .ring-only { display:none; }
+  body:not([data-type=bracelet]) .bracelet-only { display:none; }
+  body.demo #btn-cam { opacity:.35; pointer-events:none; }
+  #rotate { display:none; position:fixed; inset:0; z-index:9; background:var(--bg); color:var(--text);
+            align-items:center; justify-content:center; text-align:center; padding:30px; font-size:14px; }
+  @media (orientation: landscape) and (pointer: coarse) { #rotate { display:flex; } }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="view"></canvas></div>
+<video id="video" playsinline muted autoplay></video>
+
+<header>
+  <div class="brand">WORNVIEW</div>
+  <div class="pinfo"><div id="piece-name">-</div><div id="piece-info"></div></div>
+  <span class="chip" id="hand">aucune main</span>
+  <span class="chip" id="fps">-</span>
+</header>
+
+<div id="flash"></div>
+<div id="status" hidden></div>
+
+<div class="bar">
+  <label class="btn ghost" for="file-bar">Piece</label>
+  <button class="btn ghost" id="btn-cam">Camera</button>
+  <button class="btn" id="btn-photo">Photo</button>
+  <button class="btn ghost" id="btn-pause">Figer</button>
+  <button class="btn" id="btn-panel">Reglages</button>
+</div>
+<input type="file" id="file-bar">
+
+<section id="start">
+  <h1>WORNVIEW</h1>
+  <p class="sub">Essayage en direct - developpement produit</p>
+  <p class="desk">Cette page est prevue pour un smartphone : ouvrez-la sur le telephone en
+    scannant le QR code affiche dans Rhino.</p>
+  <div class="card">
+    <div class="lab">Piece</div>
+    <div id="start-piece">Aucune piece ouverte</div>
+    <label class="btn ghost big" for="file-start">Ouvrir un .glb exporte par Rhino</label>
+    <input type="file" id="file-start">
+  </div>
+  <button class="btn big" id="btn-start" disabled>Demarrer l'essayage</button>
+  <ol class="steps">
+    <li>Autorisez la camera, et les capteurs de mouvement (gravite des pampilles).</li>
+    <li>Filmez votre main avec la camera arriere, telephone tenu droit.</li>
+    <li>La piece ne quitte pas le telephone : rien n'est envoye.</li>
+  </ol>
+</section>
+
+<div id="rotate">Tenez le telephone a la verticale pour l'essayage.</div>
+
+<aside>
+  <div class="panel-top"><h3 style="margin:0">Placement</h3>
+    <button class="btn ghost" id="btn-close-panel">Fermer</button></div>
+  <div class="row ring-only">
+    <label>Doigt</label>
+    <div class="fingers">
+      <button data-finger="thumb">Pouce</button><button data-finger="index">Index</button>
+      <button data-finger="middle">Majeur</button><button data-finger="ring">Annul.</button>
+      <button data-finger="pinky">Auric.</button>
+    </div>
+  </div>
+  <div class="row ring-only"><label>Position sur la phalange <span id="along-v"></span></label>
+    <input type="range" id="along" min="0.05" max="0.95" step="0.01"></div>
+  <div class="row bracelet-only"><label>Recul vers l'avant-bras <span id="braceletOffset-v"></span></label>
+    <input type="range" id="braceletOffset" min="0" max="60" step="1"></div>
+  <div class="row"><label>Rotation autour de l'axe <span id="spin-v"></span></label>
+    <input type="range" id="spin" min="-180" max="180" step="1"></div>
+  <label class="check"><input type="checkbox" id="flipHead"> Retourner la piece (tete cote paume)</label>
+  <label class="check"><input type="checkbox" id="flipAxis"> Inverser le sens de l'axe</label>
+
+  <h3>Calibration de la personne</h3>
+  <div class="row ring-only"><label>Tour de doigt <span id="fingerEU-v"></span></label>
+    <input type="range" id="fingerEU" min="40" max="72" step="0.5"></div>
+  <div class="row bracelet-only"><label>Tour de poignet <span id="wristMm-v"></span></label>
+    <input type="range" id="wristMm" min="120" max="210" step="1"></div>
+  <div class="row"><label>Echelle de la main <span id="handScale-v"></span></label>
+    <input type="range" id="handScale" min="0.75" max="1.35" step="0.01"></div>
+  <label class="check"><input type="checkbox" id="showGhost"> Afficher la main virtuelle</label>
+  <p class="hint">Affichez la main virtuelle, puis reglez l'echelle jusqu'a ce que le doigt bleu
+    ait la largeur du vrai doigt : la piece est alors a sa taille reelle sur la main.</p>
+  <label class="check"><input type="checkbox" id="flipHand"> Main droite / gauche inversee</label>
+
+  <h3>Rendu</h3>
+  <div class="row"><label>Exposition <span id="exposure-v"></span></label>
+    <input type="range" id="exposure" min="0.4" max="2.2" step="0.05"></div>
+  <div class="row"><label>Pierres</label>
+    <select id="gems"><option value="sparkle">Eclat (recommande)</option>
+      <option value="refraction">Refraction (experimental)</option></select></div>
+
+  <h3>Tombe</h3>
+  <label class="check"><input type="checkbox" id="pendulums"> Parties mobiles animees</label>
+  <div class="row"><label>Amortissement <span id="damping-v"></span></label>
+    <input type="range" id="damping" min="0.3" max="10" step="0.1"></div>
+  <p class="hint">La gravite est lue sur les capteurs du telephone : le tombe reste juste
+    meme telephone incline.</p>
+
+  <h3>Camera</h3>
+  <div class="row"><label>Champ de vision (grand cote) <span id="fovLong-v"></span></label>
+    <input type="range" id="fovLong" min="45" max="90" step="1"></div>
+  <button class="btn ghost big" id="btn-reset" style="margin-top:14px">Reglages par defaut</button>
+</aside>
+
+<script type="module">
+// =====================================================================
+//  MSK_WornView - page d'essayage SMARTPHONE (developpement produit)
+//
+//  Camera du telephone -> MediaPipe (21 points de la main) -> pose 3D de
+//  la main en metres -> bague sur la phalange / bracelet au poignet ->
+//  rendu PBR three.js par-dessus la video, cache par un "fantome" de la
+//  main. Les pampilles (noeuds PEND_*) balancent sous la VRAIE gravite,
+//  lue sur les capteurs du telephone.
+//
+//  La piece (.glb exporte par Rhino) est ouverte depuis les fichiers du
+//  telephone : elle n'est envoyee nulle part, tout reste sur l'appareil.
+// =====================================================================
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+// ---- moteur de placement (worn_core.js), integre ----
+const W = (() => {
+// =====================================================================
+//  MSK_WornView - worn_core.js
+//  Mathematiques de placement, SANS dependance (testees sous Node).
+//
+//  Reperes
+//  - Camera (three.js) : x a droite, y en haut, la camera regarde -z.
+//    Unites : METRES. La camera est a l'origine.
+//  - Points image MediaPipe : u, v normalises [0..1], v vers le BAS.
+//  - Points "monde" MediaPipe : metres, origine au centre de la main,
+//    x a droite, y vers le BAS, z en profondeur (plus grand = plus loin).
+//    Leur taille est celle d'une main MOYENNE : le facteur k (calibration)
+//    ramene a la main de la personne qui essaye.
+//  - Repere de la piece (exporte par Rhino) : +Y = axe du doigt vers le
+//    bout du doigt, +Z = dos de la main (tete de la bague), X = Y x Z.
+// =====================================================================
+
+const LM = {
+  WRIST: 0, THUMB: [1, 2, 3, 4], INDEX: [5, 6, 7, 8], MIDDLE: [9, 10, 11, 12],
+  RING: [13, 14, 15, 16], PINKY: [17, 18, 19, 20],
+};
+
+// Os de la main (pour les volumes d'occultation)
+const BONES = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [5, 6], [6, 7], [7, 8],
+  [9, 10], [10, 11], [11, 12],
+  [13, 14], [14, 15], [15, 16],
+  [17, 18], [18, 19], [19, 20],
+  // paume : rayons epais, elle cache l'arriere d'un bracelet ou d'une bague
+  [0, 5], [0, 9], [0, 13], [0, 17], [5, 9], [9, 13], [13, 17], [1, 5],
+];
+
+// Rayon relatif de chaque doigt (annulaire = 1), d'apres les tables de
+// tailles : pouce ~ +15 %, majeur ~ +5 %, auriculaire ~ -15 %.
+const FINGER_RATIO = { thumb: 1.18, index: 1.0, middle: 1.05, ring: 1.0, pinky: 0.85 };
+const FINGERS = { thumb: LM.THUMB, index: LM.INDEX, middle: LM.MIDDLE,
+  ring: LM.RING, pinky: LM.PINKY };
+
+// os utilises pour estimer la profondeur : la paume (rigide)
+const DEPTH_BONES = [[0, 5], [0, 9], [0, 13], [0, 17], [5, 9], [9, 13], [13, 17], [5, 17]];
+
+// ------------------------------------------------------------ vecteurs
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0]];
+const len = (a) => Math.sqrt(dot(a, a));
+const unit = (a) => { const n = len(a); return n < 1e-12 ? [0, 0, 1] : mul(a, 1 / n); };
+const lerp = (a, b, t) => add(a, mul(sub(b, a), t));
+
+// ------------------------------------------------------------ camera
+function camTangents(hfovDeg, aspect) {
+  const tanH = Math.tan((hfovDeg * Math.PI / 180) / 2);
+  return { tanH, tanV: tanH / aspect };
+}
+
+function vfovDeg(hfovDeg, aspect) {
+  const { tanV } = camTangents(hfovDeg, aspect);
+  return 2 * Math.atan(tanV) * 180 / Math.PI;
+}
+
+// Point image -> coordonnees tangentes (x a droite, y en HAUT)
+function tang(p, cam) {
+  return [(p.x - 0.5) * 2 * cam.tanH, -(p.y - 0.5) * 2 * cam.tanV];
+}
+
+// Point monde MediaPipe -> repere camera (orientation seulement)
+function mpWorldToCam(w) { return [w.x, -w.y, -w.z]; }
+
+/**
+ * Reconstruit les 21 points de la main dans le repere CAMERA, en metres.
+ *  img   : landmarks image (21 x {x,y,z})
+ *  world : worldLandmarks (21 x {x,y,z})
+ *  k     : echelle de la main de l'essayeur / main moyenne du modele
+ * Principe : chaque point est sur le rayon de son pixel, a la profondeur
+ * Z + dz_i (dz_i = ecart de profondeur relatif donne par MediaPipe). Une
+ * seule inconnue, Z : on cherche celle pour laquelle les os de la PAUME
+ * (rigide) retrouvent leur longueur reelle en 3D. Une premiere version
+ * qui comparait des longueurs projetees ignorait la perspective et se
+ * trompait de 80 a 100 mm sur une main inclinee (banc).
+ */
+function handToCamera(img, world, cam, k = 1.0) {
+  let zref = 0;
+  const palm = [0, 5, 9, 13, 17];
+  for (const i of palm) zref += world[i].z;
+  zref /= palm.length;
+  const rays = img.map((p) => { const t = tang(p, cam); return [t[0], t[1], -1]; });
+  const dz = world.map((w) => (w.z - zref) * k);
+  const L = DEPTH_BONES.map(([a, b]) => Math.hypot(world[a].x - world[b].x,
+    world[a].y - world[b].y, world[a].z - world[b].z) * k);
+  const cost = (Z) => {
+    let s = 0;
+    DEPTH_BONES.forEach(([a, b], j) => {
+      const da = Z + dz[a], db = Z + dz[b];
+      const d = Math.hypot(rays[a][0] * da - rays[b][0] * db,
+        rays[a][1] * da - rays[b][1] * db, -da + db);
+      s += (d - L[j]) * (d - L[j]);
+    });
+    return s;
+  };
+  // balayage grossier puis section doree (cout unimodal autour du minimum)
+  let best = 0.3, bc = Infinity;
+  for (let Z = 0.06; Z <= 3.0; Z *= 1.06) { const c = cost(Z); if (c < bc) { bc = c; best = Z; } }
+  let lo = best / 1.06, hi = best * 1.06;
+  const gr = (Math.sqrt(5) - 1) / 2;
+  let x1 = hi - gr * (hi - lo), x2 = lo + gr * (hi - lo), f1 = cost(x1), f2 = cost(x2);
+  for (let i = 0; i < 60; i++) {
+    if (f1 < f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - gr * (hi - lo); f1 = cost(x1); }
+    else { lo = x1; x1 = x2; f1 = f2; x2 = lo + gr * (hi - lo); f2 = cost(x2); }
+  }
+  const Z = 0.5 * (lo + hi);
+  const pts = rays.map((r, i) => { const d = Math.max(0.05, Z + dz[i]);
+    return [r[0] * d, r[1] * d, -d]; });
+  return { pts, depth: Z, residual: Math.sqrt(cost(Z) / DEPTH_BONES.length) };
+}
+
+/**
+ * Sens du dos de la main. MediaPipe nomme la main DE LA PERSONNE filmee
+ * pour une image non inversee (doc Google : une image en miroir inverse le
+ * resultat). On lui passe toujours l'image brute de la camera.
+ *   n = (index MCP - poignet) x (auriculaire MCP - poignet)
+ *   main droite : dos = -n ; main gauche : dos = +n
+ */
+function dorsalNormal(P, isRight) {
+  const n = unit(cross(sub(P[5], P[0]), sub(P[17], P[0])));
+  return isRight ? mul(n, -1) : n;
+}
+
+// Base orthonormee directe a partir d'un axe Y et d'un Z approximatif
+function basisFromYZ(y, zApprox) {
+  const Y = unit(y);
+  let Z = sub(zApprox, mul(Y, dot(zApprox, Y)));
+  if (len(Z) < 1e-6) Z = Math.abs(Y[0]) < 0.9 ? cross(Y, [1, 0, 0]) : cross(Y, [0, 1, 0]);
+  Z = unit(Z);
+  const X = cross(Y, Z);
+  return { X, Y, Z };
+}
+
+/**
+ * Pose d'une BAGUE : sur la premiere phalange du doigt choisi.
+ *  t = position le long de la phalange (0 = articulation de la base,
+ *      1 = deuxieme articulation). Une bague se porte vers 0,35.
+ */
+function ringPose(P, finger, isRight, t = 0.35) {
+  const ids = FINGERS[finger] || LM.RING;
+  const a = P[ids[0]], b = P[ids[1]];
+  const pos = lerp(a, b, t);
+  const B = basisFromYZ(sub(b, a), dorsalNormal(P, isRight));
+  return { pos, ...B };
+}
+
+/**
+ * Pose d'un BRACELET : au poignet, un peu en retrait du point "poignet"
+ * de MediaPipe (qui est au pli du poignet), axe vers la main.
+ *  offset : recul vers l'avant-bras, en metres.
+ */
+function braceletPose(P, isRight, offset = 0.018) {
+  const yAxis = unit(sub(P[9], P[0]));
+  const pos = sub(P[0], mul(yAxis, offset));
+  // Z : dos de la main ; X dans le plan de la paume
+  const B = basisFromYZ(yAxis, dorsalNormal(P, isRight));
+  return { pos, ...B };
+}
+
+// Ellipse du poignet a partir de son tour (mm) : largeur / epaisseur ~ 1,35
+function wristEllipse(circMm, ratio = 1.35) {
+  // Ramanujan : P ~ pi (3(a+b) - sqrt((3a+b)(a+3b))), b = a / ratio
+  const f = (a) => { const b = a / ratio;
+    return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b))); };
+  let lo = 1, hi = 200;
+  for (let i = 0; i < 60; i++) { const m = 0.5 * (lo + hi); if (f(m) < circMm) lo = m; else hi = m; }
+  const a = 0.5 * (lo + hi);
+  return { a: a / 1000, b: a / ratio / 1000 };       // demi-axes, metres
+}
+
+function fingerRadiusFromEU(eu) { return eu / Math.PI / 2 / 1000; }  // m
+
+// ------------------------------------------------------------ lissage
+// Filtre "One Euro" (Casiez 2012) : lisse fort quand la main est immobile,
+// suit sans retard quand elle bouge.
+// Reglages par defaut pour des coordonnees NORMALISEES (0..1) : beta eleve,
+// sinon un geste rapide traine (banc : 41 % de retard a 0,1 s avec 0,02).
+class OneEuro {
+  constructor(minCutoff = 1.0, beta = 4.0, dCutoff = 1.0) {
+    this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
+    this.x = null; this.dx = 0; this.t = null;
+  }
+  static alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+  filter(v, t) {
+    if (this.x === null) { this.x = v; this.t = t; return v; }
+    const dt = Math.max(1e-3, t - this.t); this.t = t;
+    const dv = (v - this.x) / dt;
+    this.dx += OneEuro.alpha(this.dCutoff, dt) * (dv - this.dx);
+    const cutoff = this.minCutoff + this.beta * Math.abs(this.dx);
+    this.x += OneEuro.alpha(cutoff, dt) * (v - this.x);
+    return this.x;
+  }
+  reset() { this.x = null; this.dx = 0; this.t = null; }
+}
+
+// Lisse une liste de 21 points {x,y,z}
+class LandmarkSmoother {
+  constructor(minCutoff, beta) { this.f = []; this.minCutoff = minCutoff; this.beta = beta; }
+  apply(list, t) {
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      if (!this.f[i]) this.f[i] = [0, 1, 2].map(() => new OneEuro(this.minCutoff, this.beta));
+      const p = list[i];
+      out.push({ x: this.f[i][0].filter(p.x, t), y: this.f[i][1].filter(p.y, t),
+        z: this.f[i][2].filter(p.z, t) });
+    }
+    return out;
+  }
+  reset() { this.f = []; }
+}
+
+/**
+ * Chaine complete d'une image MediaPipe a la main en 3D, AVEC lissage :
+ *  - points image   : One Euro (coordonnees normalisees)
+ *  - points 3D      : One Euro (metres : beta 10x plus fort)
+ *  - profondeur     : filtree a part, plus fortement (la distance de la
+ *    main a la camera varie lentement ; non filtree, la bague "respire").
+ * Le sens de la main est vote sur les dernieres images (MediaPipe hesite
+ * parfois une image sur la main droite/gauche).
+ */
+class HandPipeline {
+  constructor() { this.reset(); }
+  reset() {
+    this.sImg = new LandmarkSmoother(1.0, 4.0);
+    this.sWorld = new LandmarkSmoother(1.0, 40.0);
+    this.sDepth = new OneEuro(0.6, 3.0);
+    this.votes = [];
+  }
+  process(img, world, label, t, cam, k = 1.0) {
+    const im = this.sImg.apply(img, t);
+    const wo = this.sWorld.apply(world, t);
+    const rec = handToCamera(im, wo, cam, k);
+    if (!rec) return null;
+    const Zs = this.sDepth.filter(rec.depth, t);
+    // on reapplique la profondeur filtree en conservant les rayons
+    const f = Zs / rec.depth;
+    const pts = rec.pts.map((p) => mul(p, f));
+    this.votes.push(label === 'Right' ? 1 : -1);
+    if (this.votes.length > 9) this.votes.shift();
+    const isRight = this.votes.reduce((a, b) => a + b, 0) > 0;
+    return { pts, depth: Zs, isRight, residual: rec.residual };
+  }
+}
+
+// ------------------------------------------------------------ pendules
+/**
+ * Pendule spherique amorti : point (centre de masse de la pampille) relie
+ * au pivot par une tige de longueur L. Integration de Verlet + contrainte
+ * de longueur : stable, sans parametre a regler. La pampille reagit donc
+ * aux mouvements de la main (le pivot accelere) et a la gravite.
+ */
+class Pendulum {
+  constructor(L, damping = 3.0, maxAngleDeg = 85) {
+    this.L = L; this.damping = damping;
+    this.cosMax = Math.cos(maxAngleDeg * Math.PI / 180);
+    this.p = null; this.prev = null; this.rest = null;
+  }
+  // restDir : direction pivot -> masse SANS gravite (pose de modelisation),
+  // sert de butee : la pampille ne peut pas traverser sa propre attache.
+  step(pivot, restDir, gravity, dt) {
+    dt = Math.min(dt, 1 / 30);
+    if (this.p === null) {
+      this.p = add(pivot, mul(unit(restDir), this.L));
+      this.prev = this.p.slice();
+    }
+    const vel = sub(this.p, this.prev);
+    const damp = Math.exp(-this.damping * dt);
+    const next = add(add(this.p, mul(vel, damp)), mul(gravity, dt * dt));
+    this.prev = this.p;
+    // contrainte de longueur
+    let d = unit(sub(next, pivot));
+    // butee angulaire autour de la direction d'attache
+    const r = unit(restDir);
+    const c = dot(d, r);
+    if (c < this.cosMax) {
+      const perp = unit(sub(d, mul(r, c)));
+      const s = Math.sqrt(1 - this.cosMax * this.cosMax);
+      d = add(mul(r, this.cosMax), mul(perp, s));
+    }
+    this.p = add(pivot, mul(d, this.L));
+    return d;                      // direction actuelle pivot -> masse
+  }
+  reset() { this.p = null; this.prev = null; }
+}
+
+// Quaternion (x,y,z,w) amenant le vecteur unitaire a sur b
+function quatFromTo(a, b) {
+  a = unit(a); b = unit(b);
+  const c = dot(a, b);
+  if (c < -0.999999) {
+    let ax = cross([1, 0, 0], a);
+    if (len(ax) < 1e-6) ax = cross([0, 1, 0], a);
+    ax = unit(ax);
+    return [ax[0], ax[1], ax[2], 0];
+  }
+  const v = cross(a, b);
+  const s = Math.sqrt((1 + c) * 2);
+  return [v[0] / s, v[1] / s, v[2] / s, s / 2];
+}
+
+// ------------------------------------------------------------ gravite
+/**
+ * Gravite (m/s2) dans le repere de la CAMERA, a partir de l'orientation du
+ * telephone (evenement deviceorientation, angles beta / gamma en degres).
+ * Spec W3C : R = Rz(alpha) Rx(beta) Ry(gamma) passe du repere telephone au
+ * repere terrestre ; la gravite terrestre (0, 0, -g) vue du telephone vaut
+ * donc R^T (0, 0, -g) = g (sin(gamma) cos(beta), -sin(beta), -cos(gamma) cos(beta)).
+ * alpha (cap) n'intervient pas.
+ * Repere telephone en PORTRAIT : x a droite, y en haut, z vers l'utilisateur
+ * = repere de la camera ARRIERE dans three.js. Camera AVANT : elle regarde
+ * vers l'utilisateur, son repere est tourne de 180 deg autour de y.
+ */
+function gravityFromOrientation(betaDeg, gammaDeg, front = false, g = 9.81) {
+  const b = betaDeg * Math.PI / 180, c = gammaDeg * Math.PI / 180;
+  const v = [Math.sin(c) * Math.cos(b) * g, -Math.sin(b) * g, -Math.cos(c) * Math.cos(b) * g];
+  return front ? [-v[0], v[1], -v[2]] : v;
+}
+
+// Champ de vision horizontal de l'IMAGE a partir de celui du grand cote
+// (les cameras de telephone sont donnees sur le grand cote du capteur).
+function hfovForImage(longSideFovDeg, width, height) {
+  const t = Math.tan(longSideFovDeg * Math.PI / 360);
+  const tw = width >= height ? t : t * width / height;
+  return 2 * Math.atan(tw) * 180 / Math.PI;
+}
+
+// ------------------------------------------------------------ main de demo
+// Main droite synthetique (metres, repere de la main : doigts +Y, dos +Z,
+// pouce vers -X). Sert au mode DEMO (sans camera) et aux tests.
+const DEMO_HAND = [
+  [0, 0, 0],
+  [-0.025, 0.02, -0.005], [-0.04, 0.04, 0], [-0.05, 0.06, 0], [-0.06, 0.08, 0],
+  [-0.02, 0.09, 0], [-0.022, 0.13, 0], [-0.023, 0.155, 0], [-0.024, 0.175, 0],
+  [0, 0.093, 0], [0, 0.137, 0], [0, 0.164, 0], [0, 0.185, 0],
+  [0.019, 0.088, 0], [0.021, 0.128, 0], [0.022, 0.153, 0], [0.023, 0.172, 0],
+  [0.036, 0.078, 0], [0.04, 0.108, 0], [0.042, 0.126, 0], [0.044, 0.143, 0],
+];
+
+function rotMat(ax, ay, az) {
+  const cx = Math.cos(ax), sx = Math.sin(ax), cy = Math.cos(ay), sy = Math.sin(ay);
+  const cz = Math.cos(az), sz = Math.sin(az);
+  // R = Rz * Ry * Rx
+  return [
+    [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+    [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+    [-sy, cy * sx, cy * cx],
+  ];
+}
+const mv = (R, p) => [R[0][0] * p[0] + R[0][1] * p[1] + R[0][2] * p[2],
+  R[1][0] * p[0] + R[1][1] * p[1] + R[1][2] * p[2], R[2][0] * p[0] + R[2][1] * p[1] + R[2][2] * p[2]];
+
+/**
+ * Fabrique ce que MediaPipe renverrait pour une main posee dans la scene.
+ *  rot = [ax, ay, az] (rad), trans = position du poignet (camera, m)
+ *  modelScale = taille de la main moyenne du modele / taille reelle
+ */
+function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0) {
+  const R = rotMat(rot[0], rot[1], rot[2]);
+  const P = DEMO_HAND.map((p) => add(mv(R, isRight ? p : [-p[0], p[1], p[2]]), trans));
+  const img = P.map((q) => ({ x: 0.5 + (q[0] / -q[2]) / (2 * cam.tanH),
+    y: 0.5 - (q[1] / -q[2]) / (2 * cam.tanV), z: 0 }));
+  let c = [0, 0, 0];
+  for (const q of P) c = add(c, q);
+  c = mul(c, 1 / P.length);
+  const world = P.map((q) => { const d = mul(sub(q, c), modelScale);
+    return { x: d[0], y: -d[1], z: -d[2] }; });
+  const dorsal = mv(R, [0, 0, 1]);
+  return { P, img, world, dorsal, label: isRight ? 'Right' : 'Left' };
+}
+
+return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, HandPipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
+})();
+
+
+const CFG = window.WV_CFG || {};
+const qs = new URLSearchParams(location.search);
+const DEMO = qs.get('demo') === '1';
+const $ = (id) => document.getElementById(id);
+
+// ------------------------------------------------------------ reglages
+const LS_KEY = 'msk_wornview_v2';
+const DEF = {
+  finger: 'ring', along: 0.35, fingerEU: 54, wristMm: 160, handScale: 1.0,
+  showGhost: false, flipHead: false, flipAxis: false, flipHand: false, spin: 0,
+  exposure: 1.0, gems: 'sparkle', pendulums: true, damping: 3.0,
+  fovLong: 65, facing: 'environment', braceletOffset: 18,
+};
+let S = { ...DEF };
+try { Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* stockage indisponible */ }
+const save = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) { /* idem */ } };
+const isPhone = matchMedia('(pointer: coarse)').matches;
+
+const state = {
+  piece: null, info: null, pend: [], lastHand: 0, paused: false, started: false,
+  fps: 0, frames: 0, fpsT: performance.now(), landmarker: null, stream: null,
+  videoTime: -1, lastT: performance.now() / 1000, isRight: true,
+  gravity: [0, -9.81, 0], gravitySource: 'supposee', mirrored: false,
+};
+
+// ------------------------------------------------------------ rendu
+const canvas = $('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = S.exposure;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0b0b);
+const camera = new THREE.PerspectiveCamera(40, 9 / 16, 0.01, 20);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(0.3, 1.0, 0.6);
+scene.add(key);
+scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+
+const video = $('video');
+let videoTex = null;
+
+const anchor = new THREE.Group();
+const flipper = new THREE.Group();
+anchor.add(flipper);
+scene.add(anchor);
+anchor.visible = false;
+
+// ------------------------------------------------------------ fantome de la main
+// Volumes invisibles qui ecrivent la profondeur : le doigt cache l'arriere
+// de l'anneau, la paume et le poignet cachent l'arriere du bracelet.
+const ghost = new THREE.Group();
+scene.add(ghost);
+const matHide = new THREE.MeshBasicMaterial({ colorWrite: false });
+const matShow = new THREE.MeshStandardMaterial({ color: 0x55c8ff, transparent: true, opacity: 0.38, roughness: 0.6 });
+const matSkin = new THREE.MeshStandardMaterial({ color: 0xd9a58a, roughness: 0.55 });
+const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 20, 1, true);
+const sphGeo = new THREE.SphereGeometry(1, 20, 14);
+const wristGeo = new THREE.CylinderGeometry(1, 1, 1, 40, 1, false);
+const bones = W.BONES.map(() => { const m = new THREE.Mesh(cylGeo, matHide); m.renderOrder = -1; ghost.add(m); return m; });
+const joints = Array.from({ length: 21 }, () => { const m = new THREE.Mesh(sphGeo, matHide); m.renderOrder = -1; ghost.add(m); return m; });
+const wrist = new THREE.Mesh(wristGeo, matHide);
+wrist.renderOrder = -1;
+ghost.add(wrist);
+ghost.visible = false;
+
+const ghostMaterial = () => (DEMO ? matSkin : (S.showGhost ? matShow : matHide));
+
+function fingerOf(i) {
+  if (i >= 1 && i <= 4) return 'thumb';
+  if (i >= 5 && i <= 8) return 'index';
+  if (i >= 9 && i <= 12) return 'middle';
+  if (i >= 13 && i <= 16) return 'ring';
+  if (i >= 17) return 'pinky';
+  return null;
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+function placeGhost(P, k) {
+  const rF = W.fingerRadiusFromEU(S.fingerEU);
+  const palmR = 0.0125 * k;
+  const mat = ghostMaterial();
+  const radius = new Array(21).fill(palmR);
+  W.BONES.forEach(([a, b], j) => {
+    const fa = fingerOf(a), fb = fingerOf(b);
+    let r = palmR;
+    if (fa && fa === fb && !(a === 1 && b === 2)) r = rF * W.FINGER_RATIO[fa];
+    if (a === 1 && b === 2) r = 0.011 * k;
+    const pa = new THREE.Vector3(...P[a]), pb = new THREE.Vector3(...P[b]);
+    const d = pb.clone().sub(pa); const L = d.length();
+    const m = bones[j];
+    m.material = mat;
+    m.position.copy(pa).addScaledVector(d, 0.5);
+    m.quaternion.setFromUnitVectors(UP, d.normalize());
+    m.scale.set(r, L, r);
+    if (b > 0) radius[b] = Math.min(radius[b], r);
+    if (a > 0 && fa) radius[a] = Math.min(radius[a], r);
+  });
+  joints.forEach((m, i) => { m.material = mat; m.position.set(...P[i]); m.scale.setScalar(radius[i]); });
+  const e = W.wristEllipse(S.wristMm);
+  const bp = W.braceletPose(P, state.isRight, 0);
+  const len = 0.15;
+  const c = W.sub(bp.pos, W.mul(bp.Y, len / 2 - 0.008));
+  wrist.material = mat;
+  wrist.position.set(...c);
+  wrist.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(...bp.X), new THREE.Vector3(...bp.Y), new THREE.Vector3(...bp.Z)));
+  wrist.scale.set(e.a, len, e.b);
+  ghost.visible = true;
+}
+
+// ------------------------------------------------------------ piece
+const loader = new GLTFLoader();
+const gemOriginal = new Map();
+
+// La derniere piece ouverte est gardee SUR LE TELEPHONE (IndexedDB) : en
+// rouvrant la page, l'essai reprend sans repasser par les fichiers.
+const DB = { name: 'msk_wornview', store: 'pieces' };
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB.name, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(DB.store);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbPut(k, v) {
+  try { const d = await idb(); await new Promise((res, rej) => { const t = d.transaction(DB.store, 'readwrite'); t.objectStore(DB.store).put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch (e) { /* stockage indisponible */ }
+}
+async function idbGet(k) {
+  try { const d = await idb(); return await new Promise((res) => { const r = d.transaction(DB.store).objectStore(DB.store).get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }); } catch (e) { return null; }
+}
+
+function parseGLB(buf) {
+  return new Promise((res, rej) => loader.parse(buf, '', res, rej));
+}
+
+async function setPiece(buf, fileName, remember) {
+  let gltf;
+  try { gltf = await parseGLB(buf); } catch (e) {
+    setStatus('Fichier illisible : choisissez le .glb exporte par MSK_WornView.'); return false;
+  }
+  const ex = (gltf.parser && gltf.parser.json && gltf.parser.json.asset && gltf.parser.json.asset.extras)
+    || gltf.scene.userData || {};
+  if (state.piece) {
+    flipper.remove(state.piece);
+    state.piece.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+  }
+  state.piece = gltf.scene;
+  state.info = { type: ex.type || 'ring', name: ex.name || fileName.replace(/\.glb$/i, ''),
+    d_inner_mm: ex.d_inner_mm, eu: ex.eu, exported: ex.exported, wornview: !!ex.tool };
+  flipper.add(state.piece);
+  gemOriginal.clear();
+  state.piece.traverse((o) => {
+    if (!o.isMesh) return;
+    o.renderOrder = 1;
+    const m = o.material;
+    if (m && (m.transmission > 0 || /diam|gem_|saph|rub|emer|onyx|perle/i.test(m.name || ''))) {
+      gemOriginal.set(m, { color: m.color.clone(), metalness: m.metalness, roughness: m.roughness,
+        transmission: m.transmission || 0, envMapIntensity: m.envMapIntensity ?? 1 });
+    }
+  });
+  applyGemMode();
+  setupPendulums();
+  const t = state.info.type;
+  $('piece-name').textContent = state.info.name;
+  const bits = [t === 'bracelet' ? 'Bracelet' : 'Bague'];
+  if (state.info.d_inner_mm) bits.push(t === 'bracelet' ? `diam. int. ${state.info.d_inner_mm.toFixed(1)} mm`
+    : `EU ${(state.info.eu || 0).toFixed(1)}`);
+  if (state.pend.length) bits.push(`${state.pend.length} partie(s) mobile(s)`);
+  if (state.info.exported) bits.push(`export ${state.info.exported}`);
+  $('piece-info').textContent = bits.join('  -  ');
+  document.body.dataset.type = t;
+  if (!state.info.wornview) flash('Fichier non exporte par MSK_WornView : position a regler');
+  else flash('Piece chargee');
+  updateStartPanel();
+  if (remember) await idbPut('last', { buf, fileName, t: Date.now() });
+  return true;
+}
+
+async function openFile(file) {
+  if (!file) return;
+  setStatus('Lecture de ' + file.name + '...');
+  const buf = await file.arrayBuffer();
+  if (await setPiece(buf, file.name, true)) setStatus(state.started ? 'Montrez votre main a la camera.' : 'Piece prete. Touchez Demarrer.');
+}
+
+function applyGemMode() {
+  for (const [m, o] of gemOriginal) {
+    if (S.gems === 'sparkle') {
+      // Eclat : miroir a facettes. Sans refraction reelle, c'est ce qui rend
+      // le feu d'une pierre a l'ecran ; sinon elle sort grise.
+      m.transmission = 0; m.metalness = 0.96; m.roughness = 0.03;
+      m.color.copy(o.color).lerp(new THREE.Color(1, 1, 1), 0.35);
+      m.envMapIntensity = 2.6;
+    } else {
+      m.transmission = o.transmission; m.metalness = o.metalness; m.roughness = o.roughness;
+      m.color.copy(o.color); m.envMapIntensity = o.envMapIntensity;
+    }
+    m.needsUpdate = true;
+  }
+}
+
+// ------------------------------------------------------------ pendules
+function setupPendulums() {
+  state.pend = [];
+  if (!state.piece) return;
+  const groups = new Map();
+  state.piece.traverse((o) => {
+    const m = /^PEND_(\d+)/.exec(o.name || '');
+    if (!m || !o.isMesh) return;
+    if (!groups.has(m[1])) groups.set(m[1], []);
+    groups.get(m[1]).push(o);
+  });
+  for (const [id, nodes] of groups) {
+    const box = new THREE.Box3();
+    for (const n of nodes) { n.geometry.computeBoundingBox(); box.union(n.geometry.boundingBox); }
+    const com = box.getCenter(new THREE.Vector3());
+    if (com.length() < 1e-6) continue;
+    state.pend.push({ id, nodes, com, rest: nodes.map((n) => n.quaternion.clone()),
+      sim: new W.Pendulum(1, S.damping) });
+  }
+}
+
+const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _qp = new THREE.Quaternion();
+const _s = new THREE.Vector3();
+function stepPendulums(dt) {
+  for (const p of state.pend) {
+    p.nodes.forEach((n, i) => n.quaternion.copy(p.rest[i]));
+    const n0 = p.nodes[0];
+    n0.updateWorldMatrix(true, false);
+    const pivot = new THREE.Vector3().setFromMatrixPosition(n0.matrixWorld);
+    const comW = p.com.clone().applyMatrix4(n0.matrixWorld);
+    const rest = comW.clone().sub(pivot);
+    const L = rest.length();
+    if (!S.pendulums || L < 1e-6) { p.sim.reset(); continue; }
+    p.sim.L = L; p.sim.damping = S.damping;
+    const d = p.sim.step(pivot.toArray(), rest.toArray(), state.gravity, dt);
+    const qd = W.quatFromTo(rest.toArray(), d);
+    _q.set(qd[0], qd[1], qd[2], qd[3]);
+    n0.parent.getWorldQuaternion(_qp);
+    for (const n of p.nodes) {
+      n0.matrixWorld.decompose(_v, n.userData._wq || (n.userData._wq = new THREE.Quaternion()), _s);
+      n.quaternion.copy(_qp.clone().invert().multiply(_q.clone().multiply(n.userData._wq)));
+    }
+  }
+}
+
+// ------------------------------------------------------------ gravite reelle
+function onOrientation(e) {
+  if (e.beta === null || e.gamma === null) return;
+  const portrait = !(screen.orientation && Math.abs(screen.orientation.angle) === 90)
+    && Math.abs(window.orientation || 0) !== 90;
+  if (!portrait) return;           // en paysage : derniere valeur portrait gardee
+  state.gravity = W.gravityFromOrientation(e.beta, e.gamma, S.facing === 'user');
+  state.gravitySource = 'capteurs';
+}
+
+async function startMotion() {
+  // iPhone (et Chrome recent) : autorisation demandee DANS le geste de
+  // l'utilisateur. Le resultat n'est pas bloquant : on ecoute toujours les
+  // capteurs, et c'est l'arrivee d'une mesure qui prouve qu'ils marchent
+  // (certains Android repondent "refuse" tout en envoyant les mesures).
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined'
+        && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      await DeviceOrientationEvent.requestPermission().catch(() => 'denied');
+    }
+  } catch (e) { /* ignore */ }
+  window.addEventListener('deviceorientation', onOrientation);
+  setTimeout(() => {
+    if (state.gravitySource !== 'capteurs') {
+      flash('Capteurs de mouvement indisponibles : gravite supposee vers le bas de l\'ecran');
+    }
+  }, 2500);
+}
+
+// ------------------------------------------------------------ camera
+async function startCamera() {
+  if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
+  setStatus('Ouverture de la camera...');
+  try {
+    state.stream = await navigator.mediaDevices.getUserMedia({ audio: false,
+      video: { facingMode: { ideal: S.facing }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+  } catch (e) {
+    const secure = window.isSecureContext;
+    setStatus(secure ? 'Camera refusee : autorisez-la dans les reglages du navigateur, puis rechargez la page.'
+      : 'La camera exige une adresse https://. Ouvrez la page depuis son adresse https.');
+    return false;
+  }
+  video.srcObject = state.stream;
+  await video.play().catch(() => {});
+  await new Promise((r) => (video.readyState >= 2 ? r() : video.addEventListener('loadeddata', r, { once: true })));
+  if (videoTex) videoTex.dispose();
+  videoTex = new THREE.VideoTexture(video);
+  videoTex.colorSpace = THREE.SRGBColorSpace;
+  scene.background = videoTex;
+  state.mirrored = S.facing === 'user';           // selfie : image en miroir
+  canvas.style.transform = state.mirrored ? 'scaleX(-1)' : 'none';
+  resize();
+  return true;
+}
+
+async function startTracker() {
+  if (state.landmarker) return true;
+  setStatus('Chargement du suivi de la main...');
+  try {
+    const mp = await import(CFG.mpBundle);
+    const files = await mp.FilesetResolver.forVisionTasks(CFG.mpWasm);
+    const make = (delegate) => mp.HandLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: CFG.mpModel, delegate },
+      runningMode: 'VIDEO', numHands: 1,
+      minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5 });
+    try { state.landmarker = await make('GPU'); } catch (e) { state.landmarker = await make('CPU'); }
+    return true;
+  } catch (e) {
+    setStatus('Suivi de la main indisponible (' + (e.message || e) + '). Verifiez la connexion internet du telephone.');
+    return false;
+  }
+}
+
+// ------------------------------------------------------------ mode demo
+function demoFrame(t) {
+  const cam = W.camTangents(currentHfov(), camera.aspect);
+  const rot = [0.25 + 0.35 * Math.sin(t * 0.7), 0.6 * Math.sin(t * 0.45), 0.12 * Math.sin(t * 0.9)];
+  const trans = [0.0, -0.075, -(parseFloat(qs.get('demoz')) || 0.33)];
+  const H = W.synthHand(rot, trans, cam, true, 1 / S.handScale);
+  return { img: H.img, world: H.world, label: 'Right' };
+}
+
+function currentHfov() {
+  const w = DEMO ? canvas.clientWidth : (video.videoWidth || 720);
+  const h = DEMO ? canvas.clientHeight : (video.videoHeight || 1280);
+  return W.hfovForImage(S.fovLong, w || 9, h || 16);
+}
+
+// ------------------------------------------------------------ boucle
+const pipe = new W.HandPipeline();
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now();
+  const t = now / 1000;
+  const dt = Math.min(0.05, t - state.lastT);
+  state.lastT = t;
+  if (state.paused) { renderer.render(scene, camera); return; }
+
+  let det = null;
+  if (DEMO) det = demoFrame(t);
+  else if (state.landmarker && video.readyState >= 2 && video.currentTime !== state.videoTime) {
+    state.videoTime = video.currentTime;
+    let r = null;
+    try { r = state.landmarker.detectForVideo(video, now); } catch (e) { r = null; }
+    if (r && r.landmarks && r.landmarks.length) {
+      const hd = r.handedness && r.handedness[0] && r.handedness[0][0];
+      det = { img: r.landmarks[0], world: r.worldLandmarks[0], label: hd ? hd.categoryName : 'Right' };
+    } else if (r) det = 'none';
+  }
+
+  if (det && det !== 'none') {
+    const cam = W.camTangents(currentHfov(), camera.aspect);
+    const label = S.flipHand ? (det.label === 'Right' ? 'Left' : 'Right') : det.label;
+    const h = pipe.process(det.img, det.world, label, t, cam, S.handScale);
+    if (h) {
+      state.isRight = h.isRight;
+      state.lastHand = t;
+      if (state.piece) placeAnchor(h.pts, h.isRight);
+      placeGhost(h.pts, S.handScale);
+      $('hand').textContent = (h.isRight ? 'main droite' : 'main gauche') + ` - ${(h.depth * 100).toFixed(0)} cm`;
+      if (state.started && !DEMO) setStatus('');
+    }
+  } else if (det === 'none' && t - state.lastHand > 0.35) {
+    anchor.visible = false; ghost.visible = false;
+    pipe.reset(); state.pend.forEach((p) => p.sim.reset());
+    $('hand').textContent = 'aucune main';
+    if (state.started && !DEMO) setStatus('Montrez votre main a la camera.');
+  }
+
+  if (anchor.visible) { anchor.updateMatrixWorld(true); stepPendulums(dt); }
+  renderer.render(scene, camera);
+
+  state.frames++;
+  if (now - state.fpsT > 1000) {
+    state.fps = state.frames * 1000 / (now - state.fpsT); state.frames = 0; state.fpsT = now;
+    $('fps').textContent = state.fps.toFixed(0) + ' i/s';
+  }
+}
+
+const _m4 = new THREE.Matrix4();
+function placeAnchor(P, isRight) {
+  const pose = state.info.type === 'bracelet'
+    ? W.braceletPose(P, isRight, S.braceletOffset / 1000 * S.handScale)
+    : W.ringPose(P, S.finger, isRight, S.along);
+  _m4.makeBasis(new THREE.Vector3(...pose.X), new THREE.Vector3(...pose.Y), new THREE.Vector3(...pose.Z));
+  anchor.quaternion.setFromRotationMatrix(_m4);
+  anchor.position.set(...pose.pos);
+  flipper.rotation.set(0, 0, 0);
+  if (S.spin) flipper.rotateY(S.spin * Math.PI / 180);
+  if (S.flipHead) flipper.rotateY(Math.PI);
+  if (S.flipAxis) flipper.rotateZ(Math.PI);
+  anchor.visible = true;
+}
+
+// ------------------------------------------------------------ mise en page
+function resize() {
+  const vw = DEMO ? window.innerWidth : (video.videoWidth || 720);
+  const vh = DEMO ? window.innerHeight : (video.videoHeight || 1280);
+  const aspect = vw / vh;
+  const Wd = window.innerWidth, Hd = window.innerHeight;
+  // la video REMPLIT l'ecran (comme l'appareil photo) ; le surplus deborde
+  let w = Wd, h = Wd / aspect;
+  if (h < Hd) { h = Hd; w = Hd * aspect; }
+  renderer.setSize(Math.round(w), Math.round(h), true);
+  camera.aspect = aspect;
+  camera.fov = W.vfovDeg(currentHfov(), aspect);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+
+// ------------------------------------------------------------ interface
+function setStatus(t) { const el = $('status'); el.textContent = t; el.hidden = !t; }
+let flashT = null;
+function flash(t) {
+  const el = $('flash'); el.textContent = t; el.classList.add('on');
+  clearTimeout(flashT); flashT = setTimeout(() => el.classList.remove('on'), 2200);
+}
+
+function bindRange(id, keyName, fmt, after) {
+  const el = $(id); const out = $(id + '-v');
+  el.value = S[keyName];
+  const show = () => { if (out) out.textContent = fmt(S[keyName]); };
+  show();
+  el.addEventListener('input', () => { S[keyName] = parseFloat(el.value); show(); save(); after && after(); });
+}
+function bindCheck(id, keyName, after) {
+  const el = $(id); el.checked = !!S[keyName];
+  el.addEventListener('change', () => { S[keyName] = el.checked; save(); after && after(); });
+}
+
+function updateStartPanel() {
+  $('start-piece').textContent = state.info ? state.info.name : 'Aucune piece ouverte';
+  $('btn-start').disabled = !state.info;
+}
+
+function buildUI() {
+  document.querySelectorAll('[data-finger]').forEach((b) => {
+    b.classList.toggle('on', b.dataset.finger === S.finger);
+    b.addEventListener('click', () => {
+      S.finger = b.dataset.finger; save();
+      document.querySelectorAll('[data-finger]').forEach((x) => x.classList.toggle('on', x === b));
+    });
+  });
+  bindRange('along', 'along', (v) => `${Math.round(v * 100)} %`);
+  bindRange('fingerEU', 'fingerEU', (v) => `EU ${v.toFixed(1)}`);
+  bindRange('wristMm', 'wristMm', (v) => `${v.toFixed(0)} mm`);
+  bindRange('handScale', 'handScale', (v) => `x ${v.toFixed(2)}`, () => pipe.reset());
+  bindRange('braceletOffset', 'braceletOffset', (v) => `${v.toFixed(0)} mm`);
+  bindRange('spin', 'spin', (v) => `${v.toFixed(0)} deg`);
+  bindRange('exposure', 'exposure', (v) => v.toFixed(2), () => { renderer.toneMappingExposure = S.exposure; });
+  bindRange('damping', 'damping', (v) => v.toFixed(1));
+  bindRange('fovLong', 'fovLong', (v) => `${v.toFixed(0)} deg`, resize);
+  bindCheck('showGhost', 'showGhost');
+  bindCheck('flipHead', 'flipHead');
+  bindCheck('flipAxis', 'flipAxis');
+  bindCheck('flipHand', 'flipHand', () => pipe.reset());
+  bindCheck('pendulums', 'pendulums');
+  const gm = $('gems'); gm.value = S.gems;
+  gm.addEventListener('change', () => { S.gems = gm.value; save(); applyGemMode(); });
+
+  // ouverture de la piece (deux boutons : ecran d'accueil et barre)
+  for (const id of ['file-start', 'file-bar']) {
+    $(id).addEventListener('change', (e) => { openFile(e.target.files[0]); e.target.value = ''; });
+  }
+  $('btn-start').addEventListener('click', start);
+  $('btn-panel').addEventListener('click', () => document.body.classList.toggle('panel-open'));
+  $('btn-close-panel').addEventListener('click', () => document.body.classList.remove('panel-open'));
+  $('btn-photo').addEventListener('click', takePhoto);
+  $('btn-pause').addEventListener('click', () => {
+    state.paused = !state.paused;
+    if (state.paused) video.pause(); else video.play();
+    $('btn-pause').textContent = state.paused ? 'Reprendre' : 'Figer';
+  });
+  $('btn-cam').addEventListener('click', async () => {
+    S.facing = S.facing === 'user' ? 'environment' : 'user'; save();
+    pipe.reset(); await startCamera();
+  });
+  $('btn-reset').addEventListener('click', () => { S = { ...DEF }; save(); location.reload(); });
+  if (DEMO) document.body.classList.add('demo');
+  if (!isPhone && !DEMO) document.body.classList.add('desktop');
+}
+
+async function start() {
+  if (!state.info) return;
+  $('start').hidden = true;
+  state.started = true;
+  if (DEMO) { setStatus('Mode demo : main virtuelle (aucune camera).'); return; }
+  await startMotion();                      // demande iPhone : DANS le geste
+  const okCam = await startCamera();
+  if (!okCam) { $('start').hidden = false; state.started = false; return; }
+  if (await startTracker()) setStatus('Montrez votre main a la camera.');
+}
+
+async function takePhoto() {
+  const out = document.createElement('canvas');
+  out.width = canvas.width; out.height = canvas.height;
+  const g = out.getContext('2d');
+  if (state.mirrored) { g.translate(out.width, 0); g.scale(-1, 1); }
+  g.drawImage(canvas, 0, 0);
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const name = `WornView_${(state.info ? state.info.name : 'essai').replace(/[^\w-]+/g, '_')}_${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.png`;
+  const blob = await new Promise((r) => out.toBlob(r, 'image/png'));
+  // telephone : feuille de partage (Photos, AirDrop, Teams...) si disponible
+  try {
+    const file = new File([blob], name, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: name });
+      return;
+    }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  flash('Photo enregistree');
+}
+
+// ------------------------------------------------------------ demarrage
+async function main() {
+  buildUI();
+  resize();
+  const last = await idbGet('last');
+  if (last && last.buf) await setPiece(last.buf, last.fileName || 'piece.glb', false);
+  if (DEMO && qs.get('piece')) {
+    try { const r = await fetch(qs.get('piece')); await setPiece(await r.arrayBuffer(), qs.get('piece'), false); } catch (e) { /* ignore */ }
+  }
+  updateStartPanel();
+  setStatus('');
+  frame();
+}
+
+window.__wv = { state, S, scene, camera, anchor, ghost, W, setPiece, start };
+main();
+
+</script>
+</body>
+</html>
