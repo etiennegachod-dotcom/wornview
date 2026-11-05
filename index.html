@@ -159,15 +159,17 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   <label class="check"><input type="checkbox" id="flipAxis"> Inverser le sens de l'axe</label>
 
   <h3>Calibration de la personne</h3>
-  <div class="row ring-only"><label>Tour de doigt <span id="fingerEU-v"></span></label>
+  <div class="row"><label>Tour de doigt de la personne <span id="fingerEU-v"></span></label>
     <input type="range" id="fingerEU" min="40" max="72" step="0.5"></div>
   <div class="row bracelet-only"><label>Tour de poignet <span id="wristMm-v"></span></label>
     <input type="range" id="wristMm" min="120" max="210" step="1"></div>
-  <div class="row"><label>Echelle de la main <span id="handScale-v"></span></label>
-    <input type="range" id="handScale" min="0.75" max="1.35" step="0.01"></div>
+  <div class="row"><label>Reglage fin de l'echelle <span id="handScale-v"></span></label>
+    <input type="range" id="handScale" min="0.8" max="1.25" step="0.01"></div>
   <label class="check"><input type="checkbox" id="showGhost"> Afficher la main virtuelle</label>
-  <p class="hint">Affichez la main virtuelle, puis reglez l'echelle jusqu'a ce que le doigt bleu
-    ait la largeur du vrai doigt : la piece est alors a sa taille reelle sur la main.</p>
+  <p class="hint">La taille de la main est calee automatiquement sur le tour de doigt
+    (par defaut : la taille de la bague). Si la personne a une autre taille, reglez son tour
+    de doigt. L'echelle n'est qu'un reglage fin : affichez la main virtuelle et ajustez-la si
+    le doigt bleu est plus large ou plus fin que le vrai doigt.</p>
   <label class="check"><input type="checkbox" id="flipHand"> Main droite / gauche inversee</label>
 
   <h3>Rendu</h3>
@@ -435,6 +437,41 @@ class LandmarkSmoother {
  * Le sens de la main est vote sur les dernieres images (MediaPipe hesite
  * parfois une image sur la main droite/gauche).
  */
+// ------------------------------------------------------------ echelle de la main
+/**
+ * ECHELLE REELLE DE LA MAIN, calee sur la taille de doigt de la personne.
+ *
+ * MediaPipe donne une main 3D a l'echelle d'une main MOYENNE : sur une main
+ * reelle (et selon le telephone) l'ecart atteint x2 - premier essai sur
+ * iPhone le 05/11/2026 : main vue a 13 cm au lieu de ~27 cm, bague deux fois
+ * trop grosse. Or la taille de la bague a l'ecran ne depend QUE de cette
+ * echelle.
+ *
+ * Repere anatomique : les doigts se touchent a leur base, donc l'ecart entre
+ * deux articulations voisines de la base des doigts (MCP) vaut environ 1,13
+ * fois le diametre du doigt (main d'homme moyenne : 21,5 mm d'ecart pour un
+ * doigt de 19 mm, EU 60). Ce rapport ne depend que des PROPORTIONS de la
+ * main, que MediaPipe restitue bien ; on en deduit le facteur d'echelle a
+ * partir du tour de doigt (taille EU) de la personne.
+ */
+const KNUCKLE_RATIO = 1.13;
+const PITCH_BONES = [[5, 9], [9, 13], [13, 17]];
+
+function knucklePitch(world) {
+  let s = 0;
+  for (const [a, b] of PITCH_BONES) {
+    s += Math.hypot(world[a].x - world[b].x, world[a].y - world[b].y, world[a].z - world[b].z);
+  }
+  return s / PITCH_BONES.length;
+}
+
+function scaleFromFinger(world, fingerEU) {
+  const p = knucklePitch(world);
+  if (!(p > 1e-4) || !(fingerEU > 0)) return 1.0;
+  const dFinger = fingerEU / Math.PI / 1000;               // diametre du doigt, m
+  return Math.min(4, Math.max(0.25, KNUCKLE_RATIO * dFinger / p));
+}
+
 class HandPipeline {
   constructor() { this.reset(); }
   reset() {
@@ -442,10 +479,28 @@ class HandPipeline {
     this.sWorld = new LandmarkSmoother(1.0, 40.0);
     this.sDepth = new OneEuro(0.6, 3.0);
     this.votes = [];
+    this.kHist = [];
+    this.kAuto = null;
   }
-  process(img, world, label, t, cam, k = 1.0) {
+  /**
+   *  kUser    : reglage fin de l'utilisateur (1 = calage automatique seul)
+   *  fingerEU : tour de doigt de la personne ; null = pas de calage auto
+   *  Le facteur automatique est la MEDIANE des 45 dernieres images : il ne
+   *  tremble pas et une image aberrante ne le deplace pas.
+   */
+  process(img, world, label, t, cam, kUser = 1.0, fingerEU = null) {
     const im = this.sImg.apply(img, t);
     const wo = this.sWorld.apply(world, t);
+    let k = kUser;
+    if (fingerEU) {
+      // points 3D LISSES : le bruit allonge toujours une distance mesuree,
+      // et biaiserait l'echelle vers le bas (banc : -9 % sur points bruts)
+      this.kHist.push(scaleFromFinger(wo, fingerEU));
+      if (this.kHist.length > 45) this.kHist.shift();
+      const srt = this.kHist.slice().sort((a, b) => a - b);
+      this.kAuto = srt[Math.floor(srt.length / 2)];
+      k = this.kAuto * kUser;
+    }
     const rec = handToCamera(im, wo, cam, k);
     if (!rec) return null;
     const Zs = this.sDepth.filter(rec.depth, t);
@@ -455,7 +510,7 @@ class HandPipeline {
     this.votes.push(label === 'Right' ? 1 : -1);
     if (this.votes.length > 9) this.votes.shift();
     const isRight = this.votes.reduce((a, b) => a + b, 0) > 0;
-    return { pts, depth: Zs, isRight, residual: rec.residual };
+    return { pts, depth: Zs, isRight, residual: rec.residual, k, kAuto: this.kAuto };
   }
 }
 
@@ -571,9 +626,21 @@ const mv = (R, p) => [R[0][0] * p[0] + R[0][1] * p[1] + R[0][2] * p[2],
  *  rot = [ax, ay, az] (rad), trans = position du poignet (camera, m)
  *  modelScale = taille de la main moyenne du modele / taille reelle
  */
-function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0) {
+function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0, flex = 0) {
   const R = rotMat(rot[0], rot[1], rot[2]);
-  const P = DEMO_HAND.map((p) => add(mv(R, isRight ? p : [-p[0], p[1], p[2]]), trans));
+  // flexion des 4 doigts a la base (vers la paume = -Z dans le repere main)
+  const base = DEMO_HAND.map((p) => p.slice());
+  if (flex) {
+    const c = Math.cos(flex), s = Math.sin(flex);
+    for (const ch of [LM.INDEX, LM.MIDDLE, LM.RING, LM.PINKY]) {
+      const m = DEMO_HAND[ch[0]];
+      for (const i of ch.slice(1)) {
+        const q = DEMO_HAND[i], ry = q[1] - m[1], rz = q[2] - m[2];
+        base[i] = [q[0], m[1] + ry * c + rz * s, m[2] - ry * s + rz * c];
+      }
+    }
+  }
+  const P = base.map((p) => add(mv(R, isRight ? p : [-p[0], p[1], p[2]]), trans));
   const img = P.map((q) => ({ x: 0.5 + (q[0] / -q[2]) / (2 * cam.tanH),
     y: 0.5 - (q[1] / -q[2]) / (2 * cam.tanV), z: 0 }));
   let c = [0, 0, 0];
@@ -585,7 +652,7 @@ function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0) {
   return { P, img, world, dorsal, label: isRight ? 'Right' : 'Left' };
 }
 
-return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, HandPipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
+return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_RATIO, knucklePitch, scaleFromFinger, HandPipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
 })();
 
 
@@ -595,7 +662,7 @@ const DEMO = qs.get('demo') === '1';
 const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------ reglages
-const LS_KEY = 'msk_wornview_v2';
+const LS_KEY = 'msk_wornview_v3';      // v3 : echelle calee sur le doigt
 const DEF = {
   finger: 'ring', along: 0.35, fingerEU: 54, wristMm: 160, handScale: 1.0,
   showGhost: false, flipHead: false, flipAxis: false, flipHand: false, spin: 0,
@@ -758,6 +825,13 @@ async function setPiece(buf, fileName, remember) {
   applyGemMode();
   setupPendulums();
   const t = state.info.type;
+  // Le tour de doigt de la personne sert a caler l'echelle de la main. Par
+  // defaut : la taille de la bague (une bague s'essaie a la bonne taille).
+  if (t !== 'bracelet' && state.info.eu > 30 && state.info.eu < 90) {
+    S.fingerEU = Math.round(state.info.eu * 2) / 2; save();
+    const el = $('fingerEU'); if (el) { el.value = S.fingerEU; el.dispatchEvent(new Event('input')); }
+    pipe.reset();
+  }
   $('piece-name').textContent = state.info.name;
   const bits = [t === 'bracelet' ? 'Bracelet' : 'Bague'];
   if (state.info.d_inner_mm) bits.push(t === 'bracelet' ? `diam. int. ${state.info.d_inner_mm.toFixed(1)} mm`
@@ -919,7 +993,7 @@ function demoFrame(t) {
   const cam = W.camTangents(currentHfov(), camera.aspect);
   const rot = [0.25 + 0.35 * Math.sin(t * 0.7), 0.6 * Math.sin(t * 0.45), 0.12 * Math.sin(t * 0.9)];
   const trans = [0.0, -0.075, -(parseFloat(qs.get('demoz')) || 0.33)];
-  const H = W.synthHand(rot, trans, cam, true, 1 / S.handScale);
+  const H = W.synthHand(rot, trans, cam, true, 1);
   return { img: H.img, world: H.world, label: 'Right' };
 }
 
@@ -954,12 +1028,13 @@ function frame() {
   if (det && det !== 'none') {
     const cam = W.camTangents(currentHfov(), camera.aspect);
     const label = S.flipHand ? (det.label === 'Right' ? 'Left' : 'Right') : det.label;
-    const h = pipe.process(det.img, det.world, label, t, cam, S.handScale);
+    const h = pipe.process(det.img, det.world, label, t, cam, S.handScale, S.fingerEU);
     if (h) {
       state.isRight = h.isRight;
       state.lastHand = t;
       if (state.piece) placeAnchor(h.pts, h.isRight);
-      placeGhost(h.pts, S.handScale);
+      state.k = h.k;
+      placeGhost(h.pts, h.k);
       $('hand').textContent = (h.isRight ? 'main droite' : 'main gauche') + ` - ${(h.depth * 100).toFixed(0)} cm`;
       if (state.started && !DEMO) setStatus('');
     }
@@ -983,7 +1058,7 @@ function frame() {
 const _m4 = new THREE.Matrix4();
 function placeAnchor(P, isRight) {
   const pose = state.info.type === 'bracelet'
-    ? W.braceletPose(P, isRight, S.braceletOffset / 1000 * S.handScale)
+    ? W.braceletPose(P, isRight, S.braceletOffset / 1000 * (state.k || 1))
     : W.ringPose(P, S.finger, isRight, S.along);
   _m4.makeBasis(new THREE.Vector3(...pose.X), new THREE.Vector3(...pose.Y), new THREE.Vector3(...pose.Z));
   anchor.quaternion.setFromRotationMatrix(_m4);
@@ -1046,7 +1121,7 @@ function buildUI() {
     });
   });
   bindRange('along', 'along', (v) => `${Math.round(v * 100)} %`);
-  bindRange('fingerEU', 'fingerEU', (v) => `EU ${v.toFixed(1)}`);
+  bindRange('fingerEU', 'fingerEU', (v) => `EU ${v.toFixed(1)}`, () => pipe.reset());
   bindRange('wristMm', 'wristMm', (v) => `${v.toFixed(0)} mm`);
   bindRange('handScale', 'handScale', (v) => `x ${v.toFixed(2)}`, () => pipe.reset());
   bindRange('braceletOffset', 'braceletOffset', (v) => `${v.toFixed(0)} mm`);
