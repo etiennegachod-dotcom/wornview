@@ -170,6 +170,9 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
     (par defaut : la taille de la bague). Si la personne a une autre taille, reglez son tour
     de doigt. L'echelle n'est qu'un reglage fin : affichez la main virtuelle et ajustez-la si
     le doigt bleu est plus large ou plus fin que le vrai doigt.</p>
+  <label class="check"><input type="checkbox" id="measure"> Mesurer le doigt dans l'image</label>
+  <p class="hint">Affine la taille et centre la bague sur le doigt filme. En haut de l'ecran :
+    "doigt mesure" ou "estime" (doigts serres, fond de la couleur de la peau).</p>
   <label class="check"><input type="checkbox" id="flipHand"> Main droite / gauche inversee</label>
 
   <h3>Rendu</h3>
@@ -457,7 +460,10 @@ class LandmarkSmoother {
  * qu'a la DIRECTION de cette rangee (raccourci quand la main est inclinee)
  * et aux faibles ecarts de profondeur entre les points.
  */
-const KNUCKLE_SPAN_FINGERS = 3.0;      // index-MCP -> auriculaire-MCP, en diametres
+// ecart moyen entre articulations = 1,05 x largeur du doigt : mesure 1,0 sur
+// la main d'Etienne (essai iPhone), ~1,16 sur la capture Cartier (meme main,
+// doigts ecartes) ; la mesure dans l'image affine ensuite.
+const KNUCKLE_SPAN_FINGERS = 3.15;     // index-MCP -> auriculaire-MCP, en diametres
 const FORESHORTEN_MIN = 0.45;                 // main tres inclinee : on plafonne la correction
 
 function handToCameraImg(img, world, cam, dFinger) {
@@ -519,6 +525,123 @@ class HandPipeline {
       ? KNUCKLE_SPAN_FINGERS * fingerEU / Math.PI / 1000 * kUser / wspan : kUser;
     return { pts, depth: Zs, isRight, k };
   }
+}
+
+// ------------------------------------------------------------ largeur du doigt
+/**
+ * LARGEUR REELLE DU DOIGT, MESUREE DANS L'IMAGE a l'endroit de la bague.
+ * C'est ce que fait un essayage de reference (Cartier) : le jonc a toujours
+ * exactement la largeur du doigt filme, quelle que soit la main.
+ *
+ *  frame : { data (RGBA), width, height } - image camera reduite
+ *  A, B  : articulations de la phalange (pixels de frame), t : position
+ *  hw0   : demi-largeur attendue (pixels), sert de garde-fou
+ *
+ * Le long de 7 profils perpendiculaires au doigt, on part du centre (peau)
+ * et l'on cherche de chaque cote le premier point qui n'est plus de la peau
+ * DU DOIGT : couleur trop eloignee (fond : bureau, clavier) ou creux de
+ * luminosite (pli entre deux doigts qui se touchent). Mediane des profils
+ * valides. Renvoie aussi le decalage du centre reel du doigt par rapport a
+ * l'axe MediaPipe (la bague est recentree dessus).
+ */
+function px(frame, x, y) {
+  const xi = Math.max(0, Math.min(frame.width - 2, x)), yi = Math.max(0, Math.min(frame.height - 2, y));
+  const x0 = Math.floor(xi), y0 = Math.floor(yi), fx = xi - x0, fy = yi - y0;
+  const d = frame.data, w = frame.width, o = [0, 0, 0];
+  for (let c = 0; c < 3; c++) {
+    const a = d[(y0 * w + x0) * 4 + c], b = d[(y0 * w + x0 + 1) * 4 + c];
+    const e = d[((y0 + 1) * w + x0) * 4 + c], f = d[((y0 + 1) * w + x0 + 1) * 4 + c];
+    o[c] = (a * (1 - fx) + b * fx) * (1 - fy) + (e * (1 - fx) + f * fx) * fy;
+  }
+  return o;
+}
+
+// distance de couleur peu sensible a l'ombrage : chrominance + luminance attenuee
+function cdist(p, q) {
+  const sp = p[0] + p[1] + p[2] + 1, sq = q[0] + q[1] + q[2] + 1;
+  const dr = p[0] / sp - q[0] / sq, dg = p[1] / sp - q[1] / sq;
+  const dl = (sp - sq) / 3;
+  return Math.sqrt((dr * dr + dg * dg) * 9e4 + 0.12 * dl * dl);
+}
+
+const lumOf = (p) => 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
+
+// Bords du doigt le long d'UN profil (centre c, normale n) : distances au
+// centre, cote -n et cote +n, ou null si un bord manque.
+function profileEdges(frame, c, n, hw0) {
+  const reach = 2.0 * hw0, step = Math.max(0.5, hw0 / 40);
+  const ref = [0, 0, 0]; let nr = 0;
+  for (let s = -0.3 * hw0; s <= 0.3 * hw0; s += step) {
+    const p = px(frame, c[0] + n[0] * s, c[1] + n[1] * s);
+    ref[0] += p[0]; ref[1] += p[1]; ref[2] += p[2]; nr++;
+  }
+  ref[0] /= nr; ref[1] /= nr; ref[2] /= nr;
+  const lref = lumOf(ref);
+  const edge = (sgn) => {
+    let lmin = Infinity, smin = null;
+    for (let s = 0.3 * hw0; s <= reach; s += step) {
+      const p = px(frame, c[0] + n[0] * s * sgn, c[1] + n[1] * s * sgn);
+      if (cdist(p, ref) > 32) return s;                     // fond : couleur differente
+      const l = lumOf(p);                                    // pli entre deux doigts
+      if (l < lmin) { lmin = l; smin = s; }
+      // bord du doigt : ombre du bord (creux >= 10 %) puis remontee sur le
+      // fond, ou pli entre deux doigts. Sur un bureau en bois clair, c'est
+      // le SEUL indice : bois et peau ont presque la meme couleur.
+      if (lmin < 0.9 * lref && l > lmin + 0.05 * lref && s > smin + 2 * step) return smin;
+    }
+    return null;
+  };
+  const l = edge(-1), r = edge(1);
+  return (l === null || r === null) ? null : [l, r];
+}
+
+const median = (v) => { const s = v.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+
+function measureFinger(frame, A, B, t, hw0) {
+  const ax = [B[0] - A[0], B[1] - A[1]];
+  const L = Math.hypot(ax[0], ax[1]);
+  if (L < 4 || !(hw0 > 2)) return null;
+  const a0 = [ax[0] / L, ax[1] / L];
+  let c = [A[0] + ax[0] * t, A[1] + ax[1] * t];
+  // 1. orientation : la vraie section d'un doigt est la plus ETROITE ; l'axe
+  //    MediaPipe peut etre faux de 10 a 20 deg sur une image (mesure reelle)
+  let best = null;
+  for (let deg = -24; deg <= 24; deg += 4) {
+    const th = deg * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
+    const a = [a0[0] * cs - a0[1] * sn, a0[0] * sn + a0[1] * cs], n = [-a[1], a[0]];
+    const ws = [];
+    for (const dl of [-0.12, 0, 0.12]) {
+      const e = profileEdges(frame, [c[0] + a[0] * dl * L, c[1] + a[1] * dl * L], n, hw0);
+      if (e) ws.push(e[0] + e[1]);
+    }
+    if (ws.length < 2) continue;
+    const w = median(ws);
+    if (!best || w < best.w) best = { w, a, n, deg };
+  }
+  if (!best) return null;
+  // 2. recentrage sur le milieu reel du doigt, puis mesure finale
+  const { a, n } = best;
+  for (let it = 0; it < 2; it++) {
+    const e = profileEdges(frame, c, n, hw0);
+    if (!e) break;
+    c = [c[0] + n[0] * (e[1] - e[0]) / 2, c[1] + n[1] * (e[1] - e[0]) / 2];
+  }
+  const widths = [];
+  for (const dl of [-0.12, -0.08, -0.04, 0, 0.04, 0.08, 0.12]) {
+    const e = profileEdges(frame, [c[0] + a[0] * dl * L, c[1] + a[1] * dl * L], n, hw0);
+    if (!e) continue;
+    const w = e[0] + e[1];
+    if (w < 0.9 * hw0 || w > 3.0 * hw0) continue;
+    if (Math.abs(e[0] - e[1]) > 0.35 * w) continue;         // profil desaxe : rejete
+    widths.push(w);
+  }
+  if (widths.length < 4) return null;
+  const w = median(widths);
+  const spread = median(widths.map((x) => Math.abs(x - w))) / w;
+  if (spread > 0.12) return null;                           // bords incoherents
+  const c0 = [A[0] + ax[0] * t, A[1] + ax[1] * t];
+  return { width: w, center: c, axis: a, n, angle: best.deg,
+    shift: (c[0] - c0[0]) * n[0] + (c[1] - c0[1]) * n[1], valid: widths.length, spread };
 }
 
 // ------------------------------------------------------------ pendules
@@ -659,7 +782,7 @@ function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0, flex = 0) 
   return { P, img, world, dorsal, label: isRight ? 'Right' : 'Left' };
 }
 
-return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
+return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
 })();
 
 
@@ -669,9 +792,9 @@ const DEMO = qs.get('demo') === '1';
 const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------ reglages
-const LS_KEY = 'msk_wornview_v3';      // v3 : echelle calee sur le doigt
+const LS_KEY = 'msk_wornview_v4';      // v4 : siege Cartier + mesure du doigt
 const DEF = {
-  finger: 'ring', along: 0.35, fingerEU: 54, wristMm: 160, handScale: 1.0,
+  finger: 'ring', along: 0.56, fingerEU: 54, wristMm: 160, handScale: 1.0, measure: true,
   showGhost: false, flipHead: false, flipAxis: false, flipHand: false, spin: 0,
   exposure: 1.0, gems: 'sparkle', pendulums: true, damping: 3.0,
   fovLong: 65, facing: 'environment', braceletOffset: 18,
@@ -1012,6 +1135,63 @@ function currentHfov() {
 
 // ------------------------------------------------------------ boucle
 const pipe = new W.HandPipeline();
+
+// ------------------------------------------------------------ mesure du doigt
+// Image camera reduite a 360 px de large ; la largeur du doigt y est mesuree
+// a l'endroit de la bague. Elle AFFINE la distance estimee (rangee des
+// articulations) : retenue seulement si nette et a +-20 % de l'estimation,
+// puis mediane sur une demi-seconde. Elle recentre aussi la bague sur le
+// milieu reel du doigt.
+const FW = 360;
+const fcv = document.createElement('canvas');
+const fctx = fcv.getContext('2d', { willReadFrequently: true });
+const meas = { ratios: [], shifts: [], lastOk: -1, ratio: 1, offset: [0, 0, 0] };
+function resetMeasure() { meas.ratios = []; meas.shifts = []; meas.lastOk = -1; meas.ratio = 1; meas.offset = [0, 0, 0]; }
+
+function grabFrame() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const fh = Math.round(FW * vh / vw);
+  if (fcv.width !== FW || fcv.height !== fh) { fcv.width = FW; fcv.height = fh; }
+  try { fctx.drawImage(video, 0, 0, FW, fh); return fctx.getImageData(0, 0, FW, fh); } catch (e) { return null; }
+}
+
+const medianOf = (v) => { const q = v.slice().sort((a, b) => a - b); return q[Math.floor(q.length / 2)]; };
+
+function refineWithFinger(pts, img, cam, t) {
+  if (!S.measure || S.finger === 'thumb' || !state.info || state.info.type === 'bracelet') return pts;
+  const fr = grabFrame();
+  if (fr) {
+    const ids = W.FINGERS[S.finger] || W.LM.RING;
+    const P = (i) => [img[i].x * fr.width, img[i].y * fr.height];
+    const pitch = ([[5, 9], [9, 13], [13, 17]].map(([a, b]) => Math.hypot(P(a)[0] - P(b)[0], P(a)[1] - P(b)[1]))
+      .reduce((x, y) => x + y, 0)) / 3;
+    const m = W.measureFinger(fr, P(ids[0]), P(ids[1]), S.along, pitch / 2);
+    if (m) {
+      const dF = S.fingerEU / Math.PI / 1000 * (W.FINGER_RATIO[S.finger] || 1) * S.handScale;
+      const Zm = dF / (m.width / fr.width * 2 * cam.tanH);
+      const Zc = -W.ringPose(pts, S.finger, state.isRight, S.along).pos[2];
+      const r = Zm / Zc;
+      if (r > 0.8 && r < 1.25 && Math.abs(m.shift) < 0.25 * m.width) {
+        meas.ratios.push(r); meas.shifts.push([m.shift / fr.width * 2 * cam.tanH, m.n]);
+        if (meas.ratios.length > 15) { meas.ratios.shift(); meas.shifts.shift(); }
+        meas.lastOk = t;
+      }
+    }
+  }
+  if (t - meas.lastOk > 1.0) { resetMeasure(); return pts; }     // plus de mesure : estimation seule
+  if (meas.ratios.length < 5) return pts;
+  meas.ratio = medianOf(meas.ratios);
+  const out = pts.map((p) => W.mul(p, meas.ratio));
+  // recentrage lateral (normale du doigt dans l'image -> plan de la camera)
+  const sh = medianOf(meas.shifts.map((x) => x[0]));
+  const n = meas.shifts[meas.shifts.length - 1][1];
+  const Z = -W.ringPose(out, S.finger, state.isRight, S.along).pos[2];
+  meas.offset = [n[0] * sh * Z, -n[1] * sh * Z, 0];
+  // tout le doigt est decale : bague ET volume qui masque l'arriere du jonc
+  for (const i of (W.FINGERS[S.finger] || W.LM.RING)) out[i] = W.add(out[i], meas.offset);
+  return out;
+}
 function frame() {
   requestAnimationFrame(frame);
   const now = performance.now();
@@ -1039,15 +1219,19 @@ function frame() {
     if (h) {
       state.isRight = h.isRight;
       state.lastHand = t;
-      if (state.piece) placeAnchor(h.pts, h.isRight);
-      state.k = h.k;
-      placeGhost(h.pts, h.k);
-      $('hand').textContent = (h.isRight ? 'main droite' : 'main gauche') + ` - ${(h.depth * 100).toFixed(0)} cm`;
+      const pts = DEMO ? h.pts : refineWithFinger(h.pts, det.img, cam, t);
+      const measured = !DEMO && meas.ratios.length >= 5 && t - meas.lastOk <= 1.0;
+      if (state.piece) placeAnchor(pts, h.isRight);
+      state.k = h.k * (measured ? meas.ratio : 1);
+      placeGhost(pts, state.k);
+      const zc = -W.ringPose(pts, S.finger, h.isRight, S.along).pos[2];
+      $('hand').textContent = (h.isRight ? 'main droite' : 'main gauche') + ` - ${(zc * 100).toFixed(0)} cm`
+        + (measured ? ' - doigt mesure' : ' - estime');
       if (state.started && !DEMO) setStatus('');
     }
   } else if (det === 'none' && t - state.lastHand > 0.35) {
     anchor.visible = false; ghost.visible = false;
-    pipe.reset(); state.pend.forEach((p) => p.sim.reset());
+    pipe.reset(); resetMeasure(); state.pend.forEach((p) => p.sim.reset());
     $('hand').textContent = 'aucune main';
     if (state.started && !DEMO) setStatus('Montrez votre main a la camera.');
   }
@@ -1141,6 +1325,7 @@ function buildUI() {
   bindCheck('flipAxis', 'flipAxis');
   bindCheck('flipHand', 'flipHand', () => pipe.reset());
   bindCheck('pendulums', 'pendulums');
+  bindCheck('measure', 'measure', resetMeasure);
   const gm = $('gems'); gm.value = S.gems;
   gm.addEventListener('change', () => { S.gems = gm.value; save(); applyGemMode(); });
 
@@ -1215,7 +1400,7 @@ async function main() {
   frame();
 }
 
-window.__wv = { state, S, scene, camera, anchor, ghost, W, setPiece, start };
+window.__wv = { state, S, scene, camera, anchor, ghost, W, setPiece, start, meas };
 main();
 
 </script>
