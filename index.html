@@ -1084,6 +1084,20 @@ function bodyFrame(pose2d, world, head, cam, headScale = 1.0, opts = {}) {
   // les oreilles : centre de rotation de la tete, il bouge peu quand la
   // tete tourne ou se penche ; le menton, lui, bouge beaucoup)
   let Y = sub(under, mid); Y = unit(sub(Y, mul(X, dot(Y, X))));
+  // telephone tenu bas (selfie en contre-plongee) : l'image ne dit pas si le
+  // buste penche vers la camera ; la GRAVITE (capteurs) le dit : un buste
+  // assis ou debout est presque vertical.
+  if (opts.gravity && len(opts.gravity) > 1) {
+    let Yg = mul(unit(opts.gravity), -1); Yg = sub(Yg, mul(X, dot(Yg, X)));
+    if (len(Yg) > 0.3 && dot(unit(Yg), Y) > 0.5) {
+      // direction DANS l'image : celle de l'image (penche gauche / droite) ;
+      // inclinaison vers / loin de la camera : celle de la gravite
+      Yg = unit(Yg);
+      const m = Math.hypot(Yg[0], Yg[1]), q = Math.hypot(Y[0], Y[1]) || 1;
+      Y = unit([Y[0] / q * m, Y[1] / q * m, Yg[2]]);
+      Y = unit(sub(Y, mul(X, dot(Y, X))));
+    }
+  }
   let Z = cross(X, Y);
   // le buste fait face a la camera (meme sens que le visage)
   const zf = mat3v(head.R, [0, 0, 1]);
@@ -1114,6 +1128,95 @@ class BodyPipeline {
     }
     return bodyFrame(p, w, head, cam, headScale, opts);
   }
+}
+
+/**
+ * REPERES DU COLLIER tires de sa forme (repere glTF : y haut, z devant).
+ * Le collier repose sur le cou par ses COTES et sa NUQUE ; le devant, lui,
+ * pend (pendentif, lariat en Y, sautoir). On releve le dessus de la chaine
+ * secteur par secteur autour du cou, SANS le devant (+-50 deg), on y ajuste
+ * le plan d'appui (inclinaison) et l'ellipse du tour de cou ; nuque et
+ * devant sont les points de cette ellipse. v1.8 prenait le point haut du
+ * devant : sur un lariat c'est le croisement du Y, 8 a 10 cm trop bas ->
+ * collier remonte jusqu'a la machoire (essai iPhone du 06/11/2026).
+ *  pts : [[x, y, z], ...] en m  ->  { back, front, rx, rz, tilt } ou null
+ */
+function neckRefs(pts) {
+  if (!pts || pts.length < 30) return null;
+  let ymax = -1e9, ymin = 1e9;
+  for (const p of pts) { if (p[1] > ymax) ymax = p[1]; if (p[1] < ymin) ymin = p[1]; }
+  const band = pts.filter((p) => p[1] >= ymax - Math.max(0.04, 0.35 * (ymax - ymin)));
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (const p of band) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]); }
+  let cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  const top = (cz0) => {
+    const sec = new Array(36).fill(null);
+    for (const p of pts) {
+      const az = Math.atan2(p[0] - cx, p[2] - cz0);
+      if (Math.abs(az) < 50 * Math.PI / 180) continue;
+      const k = Math.min(35, Math.floor((az + Math.PI) / (2 * Math.PI) * 36));
+      if (!sec[k] || p[1] > sec[k][1]) sec[k] = p;
+    }
+    return sec.filter(Boolean);
+  };
+  let C = top(cz);
+  if (C.length < 6) return null;
+  // ellipse  A x'^2 + B z^2 + Cz z = 1  (centre en x connu, en z ajuste)
+  const solveLS = (rows, rhs) => {
+    const n = rows[0].length, M = Array.from({ length: n }, () => new Array(n).fill(0)), v = new Array(n).fill(0);
+    rows.forEach((r, i) => { for (let a = 0; a < n; a++) { v[a] += r[a] * rhs[i]; for (let b = 0; b < n; b++) M[a][b] += r[a] * r[b]; } });
+    for (let c = 0; c < n; c++) {
+      let piv = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+      [M[c], M[piv]] = [M[piv], M[c]]; [v[c], v[piv]] = [v[piv], v[c]];
+      if (Math.abs(M[c][c]) < 1e-18) return null;
+      for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k < n; k++) M[r][k] -= f * M[c][k]; v[r] -= f * v[c]; }
+    }
+    return v.map((x, i) => x / M[i][i]);
+  };
+  let rx = 0, rz = 0;
+  for (let it = 0; it < 3; it++) {
+    const e = solveLS(C.map((p) => [(p[0] - cx) ** 2, (p[2] - cz) ** 2, p[2] - cz]), C.map(() => 1));
+    if (!e || e[0] <= 0 || e[1] <= 0) return null;
+    const czn = cz - e[2] / (2 * e[1]);
+    const k = 1 + e[2] * e[2] / (4 * e[1]);
+    rx = Math.sqrt(k / e[0]); rz = Math.sqrt(k / e[1]);
+    if (Math.abs(czn - cz) < 1e-5) { cz = czn; break; }
+    cz = czn; C = top(cz);
+    if (C.length < 6) return null;
+  }
+  // plan d'appui  y = a + b z + c x
+  const pl = solveLS(C.map((p) => [1, p[2], p[0]]), C.map((p) => p[1]));
+  if (!pl) return null;
+  const yAt = (x, z) => pl[0] + pl[1] * z + pl[2] * x;
+  const back = [cx, yAt(cx, cz - rz), cz - rz], front = [cx, yAt(cx, cz + rz), cz + rz];
+  if (!(rx > 0.02 && rx < 0.25 && rz > 0.02 && rz < 0.25)) return null;
+  return { back, front, rx, rz, tilt: Math.atan(pl[1]) * 180 / Math.PI };
+}
+
+/**
+ * COLLIER MODELISE A PLAT (dessin de face : x lateral, y haut, z mince).
+ * On le DRAPE sur un cou + buste moyens : chaque point garde sa position
+ * vue de face et recoit la profondeur de la peau a cet endroit (base du cou
+ * puis poitrine qui s'evase). Les extremites hautes (la ou la chaine passe
+ * derriere le cou) arrivent sur les cotes du cou.
+ *  info : { cx, yTop, zMid } du dessin ; renvoie f(p) -> p drape, et les
+ *  reperes nuque / devant du collier drape.
+ */
+const DRAPE = { neckRx: 0.060, neckRz: 0.052, flareX: 1.1, flareZ: 0.45, maxRx: 0.20, maxRz: 0.11, notchBelowTop: 0.028, napeUp: 0.045 };
+function flatDrape(info) {
+  const ny = info.yTop - DRAPE.notchBelowTop;              // hauteur du creux du cou dans le dessin
+  const surf = (u, v) => {
+    const below = Math.max(0, -v);
+    const rx = Math.min(DRAPE.maxRx, DRAPE.neckRx + below * DRAPE.flareX);
+    const rz = Math.min(DRAPE.maxRz, DRAPE.neckRz + below * DRAPE.flareZ);
+    const q = Math.min(1, Math.abs(u) / rx);
+    return rz * Math.sqrt(1 - q * q);
+  };
+  const map = (p) => {
+    const u = p[0] - info.cx, v = p[1] - ny, d = p[2] - info.zMid;
+    return [u, v, surf(u, v) + d];
+  };
+  return { map, back: [0, DRAPE.napeUp, -DRAPE.neckRz], front: [0, 0, DRAPE.neckRz] };
 }
 
 /**
@@ -1294,7 +1397,7 @@ function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0, flex = 0) 
   return { P, img, world, dorsal, label: isRight ? 'Right' : 'Left' };
 }
 
-return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, braceletHang, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, FACE_IDX, FACE_CANON, LOBE_CANON, facePose, faceToCamera, earlobes, lobeRay, lobeFromRays, earPose, personalFace, BODY, bodyFrame, BodyPipeline, necklacePose, FacePipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
+return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, braceletHang, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, FACE_IDX, FACE_CANON, LOBE_CANON, facePose, faceToCamera, earlobes, lobeRay, lobeFromRays, earPose, personalFace, BODY, bodyFrame, BodyPipeline, neckRefs, DRAPE, flatDrape, necklacePose, FacePipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
 })();
 
 
@@ -1621,7 +1724,36 @@ async function setPiece(buf, fileName, remember) {
   } else {
     flipper.add(state.piece);
     if (isNeck()) {
-      state.neckGeom = { back: ex.neck_back || [0, 0.02, -0.06], front: ex.neck_front || [0, -0.03, 0.065] };
+      // reperes nuque / devant tires de la FORME du collier (cotes + nuque :
+      // ce qui repose sur le cou) ; a defaut, ceux du fichier
+      const pts = [];
+      state.piece.updateMatrixWorld(true);
+      const inv = state.piece.matrixWorld.clone().invert();
+      const v = new THREE.Vector3();
+      state.piece.traverse((o) => {
+        if (!o.isMesh || o.userData.split || /^PEND_/.test(o.name || '') || /^PEND_/.test((o.parent && o.parent.name) || '')) return;
+        const pos = o.geometry.attributes.position; if (!pos) return;
+        const M = inv.clone().multiply(o.matrixWorld);
+        const step = Math.max(1, Math.floor(pos.count / 3000));
+        for (let i = 0; i < pos.count; i += step) { v.fromBufferAttribute(pos, i).applyMatrix4(M); pts.push([v.x, v.y, v.z]); }
+      });
+      // collier dessine A PLAT (epaisseur < 15 % de la largeur) : drape
+      let x0 = 1e9, x1 = -1e9, y1 = -1e9, z0 = 1e9, z1 = -1e9;
+      for (const q of pts) { x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); z0 = Math.min(z0, q[2]); z1 = Math.max(z1, q[2]); }
+      const flat = pts.length > 30 && (z1 - z0) < 0.15 * (x1 - x0);
+      const nr = flat ? null : W.neckRefs(pts);
+      if (flat) {
+        const cx = (x0 + x1) / 2;
+        // haut du dessin : moyenne des points hauts a gauche et a droite
+        let yl = -1e9, yr = -1e9;
+        for (const q of pts) { if (q[0] < cx) yl = Math.max(yl, q[1]); else yr = Math.max(yr, q[1]); }
+        const D = W.flatDrape({ cx, yTop: (yl + yr) / 2, zMid: (z0 + z1) / 2 });
+        drapePiece(state.piece, D.map);
+        state.neckGeom = { back: D.back, front: D.front, flat: true, w: x1 - x0 };
+      } else {
+        state.neckGeom = nr ? { back: nr.back, front: nr.front, fit: nr }
+          : { back: ex.neck_back || [0, 0.02, -0.06], front: ex.neck_front || [0, -0.03, 0.065] };
+      }
       if (prevType !== 'earring' && prevType !== 'necklace' && S.facing !== 'user') {
         S.facing = 'user'; save();
         flash('Collier : camera selfie, tenez le telephone a bout de bras (epaules visibles)');
@@ -1642,7 +1774,8 @@ async function setPiece(buf, fileName, remember) {
   $('piece-name').textContent = state.info.name;
   const bits = [t === 'bracelet' ? 'Bracelet' : t === 'earring' ? 'Boucles d\'oreilles' : t === 'necklace' ? 'Collier' : 'Bague'];
   if (t === 'earring') bits.push(S.earSwing ? 'pendante' : 'fixe');
-  else if (t === 'necklace') bits.push(ex.neck_back ? 'nuque et devant reperes' : 'reperes par defaut');
+  else if (t === 'necklace') bits.push(state.neckGeom && state.neckGeom.flat ? 'dessine a plat : drape sur le cou'
+    : state.neckGeom && state.neckGeom.fit ? `tour de cou ${Math.round(state.neckGeom.fit.rx * 2000)} x ${Math.round(state.neckGeom.fit.rz * 2000)} mm` : 'reperes du fichier');
   else if (state.info.d_inner_mm) bits.push(t === 'bracelet' ? `diam. int. ${state.info.d_inner_mm.toFixed(1)} mm`
     : `EU ${(state.info.eu || 0).toFixed(1)}`);
   const nPend = state.pend.filter((p) => p.kind === 'pend' && p.root === 0).length;
@@ -1656,6 +1789,31 @@ async function setPiece(buf, fileName, remember) {
   if (state.started && !DEMO) startTracker();
   if (remember) await idbPut('last', { buf, fileName, t: Date.now() });
   return true;
+}
+
+// Drape un collier dessine a plat : chaque maillage recoit sa propre copie
+// de geometrie (les pierres en instances partagent la leur), deformee dans
+// le repere de la piece, puis normales recalculees.
+function drapePiece(root, map) {
+  root.updateMatrixWorld(true);
+  const inv = root.matrixWorld.clone().invert();
+  const v = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.geometry.attributes.position || o.userData.split) return;
+    const g = o.geometry.clone();
+    const M = inv.clone().multiply(o.matrixWorld), Mi = M.clone().invert();
+    const pos = g.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(M);
+      const q = map([v.x, v.y, v.z]);
+      v.set(q[0], q[1], q[2]).applyMatrix4(Mi);
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    pos.needsUpdate = true;
+    if (g.attributes.normal) g.computeVertexNormals();
+    g.computeBoundingBox(); g.computeBoundingSphere();
+    o.geometry = g;
+  });
 }
 
 // Centre de gravite approche : centroide des surfaces (triangles ponderes
@@ -2169,7 +2327,7 @@ function setupGlare() {
         gl_FragColor = vec4(c, 1.0); }`;
     glare.bl = quad(blurFS, { t: { value: null }, d: { value: new THREE.Vector2() } });
     glare.add = quad(`uniform sampler2D t; uniform float k; varying vec2 vUv; void main() { vec3 c = texture2D(t, vUv).rgb * k;
-      gl_FragColor = vec4(c / (1.0 + c), 1.0); }`, { t: { value: null }, k: { value: 0.45 } },
+      gl_FragColor = vec4(c / (1.0 + c), 1.0); }`, { t: { value: null }, k: { value: 0.3 } },
       { blending: THREE.AdditiveBlending, transparent: true });
     glare.ok = true;
   } catch (e) { glare.ok = false; }
@@ -2644,14 +2802,15 @@ function neckStep(t, now) {
     const head = facePipe.process(face, t, cam, S.headScale, S.faceCanon);
     if (head) {
       state.lastPose = head;
-      const body = bodyPipe.process(pose, world, head, cam, t, S.headScale, { notch: S.notchCal });
+      const body = bodyPipe.process(pose, world, head, cam, t, S.headScale,
+        { notch: S.notchCal, gravity: state.gravitySource === 'capteurs' ? state.gravity : null });
       state.lastBody = body;
       state.lastHand = t;
       placeNecklace(body, head);
       $('hand').textContent = `buste - ${(-body.mid[2] * 100).toFixed(0)} cm`;
       if (state.started && !DEMO) setStatus('');
     }
-  } else if ((none || (!face && !pose && !DEMO && state.faceLm)) && t - state.lastHand > 0.5) {
+  } else if (none && t - state.lastHand > 0.5) {
     anchor.visible = false; headG.visible = false; neckOcc.visible = false; torsoOcc.visible = false;
     facePipe.reset(); bodyPipe.reset(); state.pend.forEach((p) => p.sim.reset());
     $('hand').textContent = face ? 'epaules non vues' : 'aucun visage';
@@ -2679,10 +2838,13 @@ function placeNecklace(body, head) {
   neckOcc.quaternion.setFromUnitVectors(UP, new THREE.Vector3(...ax).normalize());
   neckOcc.scale.set(r, L, r * 0.92); neckOcc.visible = true;
   torsoOcc.material = mat;
-  torsoOcc.position.set(...W.add(W.sub(body.mid, W.mul(body.Y, 0.16)), W.mul(body.Z, -0.015)));
+  // buste : ne cache que ce qui passe DERRIERE (epaules, dos) ; jamais le
+  // devant du collier, meme si la poitrine de la personne avance plus que
+  // celle du buste de modelisation
+  torsoOcc.position.set(...W.add(W.sub(body.mid, W.mul(body.Y, 0.16)), W.mul(body.Z, -0.035)));
   _m4.makeBasis(new THREE.Vector3(...body.X), new THREE.Vector3(...body.Y), new THREE.Vector3(...body.Z));
   torsoOcc.quaternion.setFromRotationMatrix(_m4);
-  torsoOcc.scale.set(Math.max(0.12, body.W / 2 * 1.02), 0.22, 0.075);
+  torsoOcc.scale.set(Math.max(0.12, body.W / 2 * 1.02), 0.22, 0.05);
   torsoOcc.visible = true;
   // tete (cache l'arriere de la chaine) : memes volumes que pour les boucles
   const R = head.R, T = head.T, k = S.headScale;
