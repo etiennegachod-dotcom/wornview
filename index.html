@@ -9,10 +9,11 @@
 <title>MSK WornView</title>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+               "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js" } }
 </script>
 <script>
-window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs", mpWasm: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm", mpModel: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", mpFaceModel: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" };
+window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs", mpWasm: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm", mpModel: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", mpFaceModel: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", mpPoseModel: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task" };
 </script>
 <style>
   :root { --bg:#0a0a0a; --panel:rgba(12,12,12,.94); --line:#2a2a2a; --text:#f0f0f0;
@@ -88,8 +89,9 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   .panel-top .btn { min-height:36px; padding:4px 14px; }
   body[data-type=bracelet] .ring-only { display:none; }
   body:not([data-type=bracelet]) .bracelet-only { display:none; }
-  body[data-type=earring] .hand-only { display:none; }
+  body[data-type=earring] .hand-only, body[data-type=necklace] .hand-only { display:none; }
   body:not([data-type=earring]) .ear-only { display:none; }
+  body:not([data-type=necklace]) .neck-only { display:none; }
   body.demo #btn-cam { opacity:.35; pointer-events:none; }
   #enroll { position:fixed; left:10px; right:10px; top:calc(64px + env(safe-area-inset-top)); z-index:5;
             background:rgba(0,0,0,.72); border:1px solid var(--gold); border-radius:4px; padding:10px 12px;
@@ -112,6 +114,8 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
         border:1px solid #3a3a3a; border-radius:18px; padding:5px 10px 5px 5px; font-size:11px; min-height:34px; }
   .sw i { width:20px; height:20px; border-radius:50%; display:block; border:1px solid rgba(255,255,255,.25); }
   .sw.on { border-color:var(--gold); color:var(--gold); }
+  .fixrow { display:flex; gap:6px; padding:2px 12px 6px; }
+  .fixrow .sw { padding:5px 12px; }
   #rotate { display:none; position:fixed; inset:0; z-index:9; background:var(--bg); color:var(--text);
             align-items:center; justify-content:center; text-align:center; padding:30px; font-size:14px; }
   @media (orientation: landscape) and (pointer: coarse) { #rotate { display:flex; } }
@@ -143,6 +147,8 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   <div class="mrow"><div class="mlab">Metal</div><div class="sws" id="mat-metal"></div></div>
   <div class="mrow" id="mat-pave-row"><div class="mlab">Pierres de pavage</div><div class="sws" id="mat-pave"></div></div>
   <div class="mrow" id="mat-center-row"><div class="mlab">Pierre de centre</div><div class="sws" id="mat-center"></div></div>
+  <div class="fixrow"><button class="sw" id="btn-fix"><span>Corriger : toucher une pierre</span></button>
+    <button class="sw" id="btn-fix-reset"><span>Roles auto</span></button></div>
 </section>
 <input type="file" id="file-bar">
 
@@ -160,8 +166,8 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   <button class="btn big" id="btn-start" disabled>Demarrer l'essayage</button>
   <ol class="steps">
     <li>Autorisez la camera, et les capteurs de mouvement (gravite des pampilles).</li>
-    <li>Bague, bracelet : filmez la main (camera arriere). Boucles d'oreilles : le visage
-      (camera selfie, ou arriere pour filmer quelqu'un), telephone tenu droit.</li>
+    <li>Bague, bracelet : filmez la main (camera arriere). Boucles d'oreilles : le visage ;
+      collier : le visage et les epaules (camera selfie, ou arriere pour filmer quelqu'un).</li>
     <li>La piece ne quitte pas le telephone : rien n'est envoye.</li>
   </ol>
 </section>
@@ -179,6 +185,20 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
 <aside>
   <div class="panel-top"><h3 style="margin:0">Placement</h3>
     <button class="btn ghost" id="btn-close-panel">Fermer</button></div>
+  <div class="neck-only">
+    <div class="row"><label>Fourchette sternale (creux a la base du cou)</label>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:6px">
+        <button class="btn" id="btn-notch">Caler : toucher le creux du cou</button>
+        <button class="btn ghost" id="btn-notch-reset">Moyenne</button></div></div>
+    <p class="hint">Epaules et visage dans l'image. Le collier se pose sur la nuque et suit le buste (pas la
+      tete). Un toucher sur le creux a la base du cou cale la hauteur pour CETTE personne.</p>
+    <div class="row"><label>Tour de cou <span id="neckMm-v"></span></label>
+      <input type="range" id="neckMm" min="300" max="440" step="5"></div>
+    <div class="row"><label>Retouche : hauteur <span id="neckDy-v"></span></label>
+      <input type="range" id="neckDy" min="-40" max="40" step="1"></div>
+    <div class="row"><label>Retouche : avant / arriere <span id="neckDz-v"></span></label>
+      <input type="range" id="neckDz" min="-30" max="30" step="1"></div>
+  </div>
   <div class="ear-only">
     <div class="row"><label>Oreilles</label>
       <select id="earWhich"><option value="both">Les deux (paire)</option>
@@ -214,8 +234,8 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   </div>
   <div class="row ring-only hand-only"><label>Position sur la phalange <span id="along-v"></span></label>
     <input type="range" id="along" min="0.05" max="0.95" step="0.01"></div>
-  <div class="row bracelet-only"><label>Recul vers l'avant-bras <span id="braceletOffset-v"></span></label>
-    <input type="range" id="braceletOffset" min="0" max="60" step="1"></div>
+  <div class="row bracelet-only"><label>Recul depuis le pli du poignet <span id="braceletOffset-v"></span></label>
+    <input type="range" id="braceletOffset" min="0" max="40" step="1"></div>
   <div class="row hand-only"><label>Rotation autour de l'axe <span id="spin-v"></span></label>
     <input type="range" id="spin" min="-180" max="180" step="1"></div>
   <label class="check"><input type="checkbox" id="flipHead"> Retourner la piece (tete cote paume / face arriere)</label>
@@ -245,6 +265,10 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
   <h3>Rendu</h3>
   <div class="row"><label>Exposition <span id="exposure-v"></span></label>
     <input type="range" id="exposure" min="0.4" max="2.2" step="0.05"></div>
+  <div class="row"><label>Qualite des pierres</label>
+    <select id="quality"><option value="hd">Joaillerie HD (lancer de rayons, comme KeyShot)</option>
+      <option value="fast">Rapide (telephones anciens)</option></select></div>
+  <label class="check"><input type="checkbox" id="glare"> Eclat des reflets (glare)</label>
   <label class="check"><input type="checkbox" id="autoLight"> Lumiere de la piece calee sur la camera</label>
   <label class="check ring-only hand-only"><input type="checkbox" id="shadow"> Ombre de contact sur le doigt</label>
   <p class="hint">Matieres du metal et des pierres : bouton MATIERES en bas de l'ecran.</p>
@@ -278,6 +302,7 @@ window.WV_CFG = { mpBundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-visio
 // =====================================================================
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 // ---- moteur de placement (worn_core.js), integre ----
 const W = (() => {
 // =====================================================================
@@ -438,12 +463,52 @@ function ringPose(P, finger, isRight, t = 0.35) {
  * de MediaPipe (qui est au pli du poignet), axe vers la main.
  *  offset : recul vers l'avant-bras, en metres.
  */
-function braceletPose(P, isRight, offset = 0.018) {
+function braceletPose(P, isRight, offset = 0.010) {
   const yAxis = unit(sub(P[9], P[0]));
   const pos = sub(P[0], mul(yAxis, offset));
   // Z : dos de la main ; X dans le plan de la paume
   const B = basisFromYZ(yAxis, dorsalNormal(P, isRight));
   return { pos, ...B };
+}
+
+/**
+ * BRACELET PORTE : un bracelet est plus large que le poignet, il PEND.
+ *  - en travers : il s'appuie sur le haut du poignet (cote oppose a la
+ *    gravite) et son centre descend d'autant ;
+ *  - le long du bras : il glisse vers la main quand la main est plus basse
+ *    que le coude, vers l'avant-bras dans le cas contraire.
+ *  P : points 3D de la main ; g : gravite (repere camera) ; wrist : demi-axes
+ *  de l'ellipse du poignet (m) ; rIn : rayon interieur du bracelet (m) ;
+ *  base : recul du centre du bracelet depuis le pli du poignet (m).
+ * Renvoie la pose (pos, X, Y, Z) du CENTRE du bracelet + contact.
+ */
+function braceletHang(P, isRight, g, wrist, rIn, base = 0.010, slide = 0.012) {
+  const w = braceletPose(P, isRight, 0);
+  const gl = len(g) > 1e-6 ? unit(g) : [0, 0, 0];     // gravite inconnue : ni glissement ni chute
+  // glissement le long du bras : main en bas -> vers la main (recul plus petit)
+  const along = dot(gl, w.Y);                     // > 0 : la gravite tire vers les doigts
+  const off = Math.max(0.0, Math.min(0.045, base - slide * along));
+  const c0 = sub(P[0], mul(w.Y, off));
+  // en travers : composante de la gravite dans le plan du poignet (X, Z)
+  const gx = dot(gl, w.X), gz = dot(gl, w.Z);
+  const gp = Math.hypot(gx, gz);
+  let pos = c0, drop = 0;
+  if (gp > 0.05 && rIn > Math.min(wrist.a, wrist.b)) {
+    const ux = gx / gp, uz = gz / gp;             // direction de la chute, dans le plan
+    // point d'appui : point de l'ellipse dont la normale est opposee a la chute
+    const nx = -ux, nz = -uz;
+    const t = Math.atan2(nz * wrist.b, nx * wrist.a);
+    const px = wrist.a * Math.cos(t), pz = wrist.b * Math.sin(t);
+    // centre du bracelet = appui + chute * rIn, borne par le jeu disponible
+    let cx = px + ux * rIn, cz = pz + uz * rIn;
+    const jeu = Math.max(0, rIn - Math.min(wrist.a, wrist.b));
+    const m = Math.hypot(cx, cz);
+    if (m > jeu) { cx *= jeu / m; cz *= jeu / m; }
+    drop = Math.hypot(cx, cz) * Math.min(1, gp * 1.2);
+    const k = Math.min(1, gp * 1.2);              // bras presque vertical : centre
+    pos = add(c0, add(mul(w.X, cx * k), mul(w.Z, cz * k)));
+  }
+  return { pos, X: w.X, Y: w.Y, Z: w.Z, off, drop, wristCenter: c0 };
 }
 
 // Ellipse du poignet a partir de son tour (mm) : largeur / epaisseur ~ 1,35
@@ -988,6 +1053,95 @@ function personalFace(frames, rounds = 3) {
   return canon;
 }
 
+// ------------------------------------------------------------ COU, EPAULES, CLAVICULES (colliers)
+/**
+ * Repere du BUSTE a partir de la tete (visage MediaPipe, precis en
+ * profondeur) et des epaules (MediaPipe Pose, points 11 = epaule gauche de
+ * la personne, 12 = droite). Le visage donne la DISTANCE, les epaules
+ * l'ORIENTATION du buste (rotation des epaules, inclinaison) ; la tete
+ * peut tourner sans entrainer le collier.
+ *   pose2d : 33 points normalises ; world : 33 points metriques (z relatif)
+ *   head : pose du visage (facePose) ; opts.notch : calage de la fourchette
+ *   sternale { up, side } (m, repere du buste)
+ * Renvoie { mid, X, Y, Z, W, notch, nape, neckBase } (repere camera, m).
+ *  X : vers la gauche de la personne ; Y : haut du buste ; Z : devant.
+ */
+const BODY = { notchUp: 0.020, notchFwd: 0.060, napeUp: 0.075, napeBack: 0.045, shoulderBelowEar: 0.115 };
+function bodyFrame(pose2d, world, head, cam, headScale = 1.0, opts = {}) {
+  const tanOf = (p) => [(p.x - 0.5) * 2 * cam.tanH, -(p.y - 0.5) * 2 * cam.tanV];
+  // profondeur des epaules : celle du dessous des oreilles (visage moyen)
+  const under = faceToCamera(head, [0, -11.5, -4.0], headScale);
+  const Zm = -under[2];
+  const dz = world ? Math.max(-0.12, Math.min(0.12, (world[11].z - world[12].z) / 2)) : 0;
+  const tl = tanOf(pose2d[11]), tr = tanOf(pose2d[12]);
+  // pose MediaPipe : z plus petit = plus pres de la camera
+  const L = [tl[0] * (Zm + dz), tl[1] * (Zm + dz), -(Zm + dz)];
+  const R = [tr[0] * (Zm - dz), tr[1] * (Zm - dz), -(Zm - dz)];
+  const mid = mul(add(L, R), 0.5);
+  let X = unit(sub(L, R));
+  const W = len(sub(L, R));
+  // haut du buste : du milieu des epaules vers le haut du cou (point sous
+  // les oreilles : centre de rotation de la tete, il bouge peu quand la
+  // tete tourne ou se penche ; le menton, lui, bouge beaucoup)
+  let Y = sub(under, mid); Y = unit(sub(Y, mul(X, dot(Y, X))));
+  let Z = cross(X, Y);
+  // le buste fait face a la camera (meme sens que le visage)
+  const zf = mat3v(head.R, [0, 0, 1]);
+  if (dot(Z, zf) < 0) { X = mul(X, -1); Z = cross(X, Y); }
+  const k = opts.scale || 1;
+  const nU = (opts.notch && opts.notch.up !== undefined) ? opts.notch.up : BODY.notchUp * k;
+  const nS = (opts.notch && opts.notch.side) || 0;
+  const notch = add(add(add(mid, mul(Y, nU)), mul(Z, BODY.notchFwd * k)), mul(X, nS));
+  const nape = add(add(add(mid, mul(Y, nU + (BODY.napeUp - BODY.notchUp) * k)), mul(Z, -BODY.napeBack * k)), mul(X, nS));
+  return { mid, X, Y, Z, W, notch, nape, neckBase: mul(add(notch, nape), 0.5), L, R };
+}
+
+/**
+ * Suivi du buste LISSE : epaules (image) en One Euro ; profondeur relative
+ * des epaules (z MediaPipe, tres bruite : +-2 cm d'une image a l'autre)
+ * lissee fortement : le buste tourne lentement, la tete vite.
+ */
+class BodyPipeline {
+  constructor() { this.reset(); }
+  reset() { this.f = [0, 1, 2, 3].map(() => new OneEuro(0.8, 3.0)); this.fz = new OneEuro(0.15, 0.5); }
+  process(pose2d, world, head, cam, t, headScale = 1.0, opts = {}) {
+    const p = pose2d.slice(); const w = world ? world.slice() : null;
+    p[11] = { x: this.f[0].filter(pose2d[11].x, t), y: this.f[1].filter(pose2d[11].y, t) };
+    p[12] = { x: this.f[2].filter(pose2d[12].x, t), y: this.f[3].filter(pose2d[12].y, t) };
+    if (w) {
+      const dz = this.fz.filter(world[11].z - world[12].z, t);
+      w[11] = { z: dz / 2 }; w[12] = { z: -dz / 2 };
+    }
+    return bodyFrame(p, w, head, cam, headScale, opts);
+  }
+}
+
+/**
+ * Pose du COLLIER : le point de NUQUE du collier est pose sur la nuque
+ * (7e vertebre), et sa ligne nuque -> devant vise la fourchette sternale :
+ * le collier prend l'inclinaison du cou de la personne.
+ *  neck : { back, front } du collier en m, repere du collier (glTF : Y haut,
+ *  Z devant, origine = milieu nuque / devant)
+ */
+function necklacePose(body, neck) {
+  const d = sub(body.notch, body.nape);
+  const Zb = unit(sub(d, mul(body.X, dot(d, body.X))));        // nuque -> devant, dans le plan sagittal
+  const Yb = unit(cross(Zb, body.X));
+  // ligne nuque -> devant du collier (repere du collier)
+  const m = sub(neck.front, neck.back);
+  const am = Math.atan2(m[1], m[2]);                            // inclinaison du collier tel que modelise
+  // rotation autour de X pour amener la ligne du collier sur celle du cou
+  const ca = Math.cos(-am), sa = Math.sin(-am);
+  // repere final : on part du repere (X, Yb, Zb) et on compense l'inclinaison du modele
+  const Y = unit(add(mul(Yb, ca), mul(Zb, -sa)));
+  const Z = unit(add(mul(Zb, ca), mul(Yb, sa)));
+  const X = cross(Y, Z);
+  // l'origine du collier est placee pour que son point de nuque tombe sur la nuque
+  const b = neck.back;
+  const pos = sub(body.nape, add(add(mul(X, b[0]), mul(Y, b[1])), mul(Z, b[2])));
+  return { pos, X, Y, Z };
+}
+
 /** Suivi du visage lisse (One Euro sur les 33 points utiles) -> pose de tete. */
 class FacePipeline {
   constructor() { this.reset(); }
@@ -1140,7 +1294,7 @@ function synthHand(rot, trans, cam, isRight = true, modelScale = 1.0, flex = 0) 
   return { P, img, world, dorsal, label: isRight ? 'Right' : 'Left' };
 }
 
-return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, FACE_IDX, FACE_CANON, LOBE_CANON, facePose, faceToCamera, earlobes, lobeRay, lobeFromRays, earPose, personalFace, FacePipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
+return { LM, BONES, FINGER_RATIO, FINGERS, add, sub, mul, dot, cross, len, unit, lerp, camTangents, vfovDeg, mpWorldToCam, handToCamera, dorsalNormal, basisFromYZ, ringPose, braceletPose, braceletHang, wristEllipse, fingerRadiusFromEU, OneEuro, LandmarkSmoother, KNUCKLE_SPAN_FINGERS, handToCameraImg, HandPipeline, measureFinger, FACE_IDX, FACE_CANON, LOBE_CANON, facePose, faceToCamera, earlobes, lobeRay, lobeFromRays, earPose, personalFace, BODY, bodyFrame, BodyPipeline, necklacePose, FacePipeline, Pendulum, quatFromTo, gravityFromOrientation, hfovForImage, DEMO_HAND, synthHand };
 })();
 
 
@@ -1155,9 +1309,10 @@ const DEF = {
   finger: 'ring', along: 0.56, fingerEU: 54, wristMm: 160, handScale: 1.0, measure: true,
   showGhost: false, flipHead: false, flipAxis: false, flipHand: false, spin: 0,
   exposure: 1.0, pendulums: true, damping: 3.0,
-  matMetal: 'file', matPave: 'file', matCenter: 'file', autoLight: true, shadow: true,
-  fovLong: 65, facing: 'environment', braceletOffset: 18,
+  matMetal: 'file', matPave: 'file', matCenter: 'file', autoLight: true, shadow: true, quality: 'hd', glare: true,
+  fovLong: 65, facing: 'environment', braceletOffset: 10,
   // boucles d'oreilles
+  neckMm: 370, neckDy: 0, neckDz: 0, notchCal: null,
   earWhich: 'both', earAngle: 60, earDy: 0, earDz: 0, headScale: 1.0, earMirror: true, earSwing: true,
   lobeRays: [],             // (v1.6, cote gauche en miroir) repris dans lobeRaysL
   lobeRaysL: [], lobeRaysR: [],   // lobes touches, repere du visage, par cote
@@ -1165,6 +1320,7 @@ const DEF = {
 };
 let S = { ...DEF };
 try { Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (e) { /* stockage indisponible */ }
+if (S.braceletOffset === 18) S.braceletOffset = 10;     // v1.8 : ancien defaut (trop loin vers le coude)
 const save = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) { /* idem */ } };
 const isPhone = matchMedia('(pointer: coarse)').matches;
 
@@ -1178,6 +1334,8 @@ const state = {
 state.lobe = null; state.lobeR = null; state.lastPose = null; state.tapLobe = false;
 if (S.lobeRays && S.lobeRays.length && !S.lobeRaysL.length) { S.lobeRaysL = S.lobeRays; S.lobeRays = []; }
 const isEar = () => !!(state.info && state.info.type === 'earring');
+const isNeck = () => !!(state.info && state.info.type === 'necklace');
+const isFaceType = () => isEar() || isNeck();
 
 // ------------------------------------------------------------ rendu
 const canvas = $('view');
@@ -1241,6 +1399,11 @@ function updateEnv() {
   cubeRT.texture.needsPMREMUpdate = true;
 }
 scene.environment = cubeRT.texture;
+// une pierre HD refusee par le telephone (shader) : retour au rendu rapide
+renderer.debug.onShaderError = (gl, program, vs, fs) => {
+  console.warn('WornView : shader refuse, passage en rendu rapide');
+  if (S.quality === 'hd') { S.quality = 'fast'; save(); setTimeout(() => { applyLooks(); flash('Rendu HD indisponible : rendu rapide'); }, 0); }
+};
 
 // Estimation de la lumiere sur l'image camera (2 fois par seconde) :
 // exposition et couleur ambiante suivent la scene filmee.
@@ -1324,9 +1487,9 @@ scene.add(headG); headG.visible = false;
 // contre 7,8) : la boucle du cote filme n'est jamais coupee par la tete.
 const headOcc = new THREE.Mesh(sphGeo, matHide);
 headOcc.position.set(0, 0.015, -0.03); headOcc.scale.set(0.070, 0.105, 0.095);
-const neckOcc = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 28, 1, false), matHide);
-neckOcc.position.set(0, -0.12, -0.045); neckOcc.scale.set(0.052, 0.16, 0.052);
-for (const m of [headOcc, neckOcc]) { m.renderOrder = -1; headG.add(m); }
+const neckOcc0 = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 28, 1, false), matHide);
+neckOcc0.position.set(0, -0.12, -0.045); neckOcc0.scale.set(0.052, 0.16, 0.052);
+for (const m of [headOcc, neckOcc0]) { m.renderOrder = -1; headG.add(m); }
 
 function fingerOf(i) {
   if (i >= 1 && i <= 4) return 'thumb';
@@ -1380,7 +1543,7 @@ function placeGhost(P, k) {
   });
   const e = W.wristEllipse(S.wristMm);
   const bp = W.braceletPose(P, state.isRight, 0);
-  const len = 0.15;
+  const len = 0.15;      // poignet + avant-bras (cache l'arriere du bracelet)
   const c = W.sub(bp.pos, W.mul(bp.Y, len / 2 - 0.008));
   wrist.material = mat;
   wrist.position.set(...c);
@@ -1434,6 +1597,7 @@ async function setPiece(buf, fileName, remember) {
     d_inner_mm: ex.d_inner_mm, eu: ex.eu, exported: ex.exported, wornview: !!ex.tool };
   anchor.visible = false; ghost.visible = false; headG.visible = false;
   ears.forEach((e) => { e.g.visible = false; });
+  prepareParts();                       // metal / pavage / centre (avant le clone des boucles)
   if (isEar()) {
     // centre de gravite de la boucle (repere de la piece, attache = origine)
     state.piece.updateMatrixWorld(true);
@@ -1449,13 +1613,21 @@ async function setPiece(buf, fileName, remember) {
     ears[0].holder.add(state.piece);
     state.pieceR = state.piece.clone(true);
     ears[1].holder.add(state.pieceR);
-    if (prevType !== 'earring' && S.facing !== 'user') {
+    if (prevType !== 'earring' && prevType !== 'necklace' && S.facing !== 'user') {
       S.facing = 'user'; save();
       flash('Boucles : camera selfie (bouton Camera pour filmer quelqu\'un)');
       if (state.started) startCamera();
     }
   } else {
     flipper.add(state.piece);
+    if (isNeck()) {
+      state.neckGeom = { back: ex.neck_back || [0, 0.02, -0.06], front: ex.neck_front || [0, -0.03, 0.065] };
+      if (prevType !== 'earring' && prevType !== 'necklace' && S.facing !== 'user') {
+        S.facing = 'user'; save();
+        flash('Collier : camera selfie, tenez le telephone a bout de bras (epaules visibles)');
+        if (state.started) startCamera();
+      }
+    }
   }
   setupLooks();
   setupPendulums();
@@ -1468,8 +1640,9 @@ async function setPiece(buf, fileName, remember) {
     pipe.reset();
   }
   $('piece-name').textContent = state.info.name;
-  const bits = [t === 'bracelet' ? 'Bracelet' : t === 'earring' ? 'Boucles d\'oreilles' : 'Bague'];
+  const bits = [t === 'bracelet' ? 'Bracelet' : t === 'earring' ? 'Boucles d\'oreilles' : t === 'necklace' ? 'Collier' : 'Bague'];
   if (t === 'earring') bits.push(S.earSwing ? 'pendante' : 'fixe');
+  else if (t === 'necklace') bits.push(ex.neck_back ? 'nuque et devant reperes' : 'reperes par defaut');
   else if (state.info.d_inner_mm) bits.push(t === 'bracelet' ? `diam. int. ${state.info.d_inner_mm.toFixed(1)} mm`
     : `EU ${(state.info.eu || 0).toFixed(1)}`);
   const nPend = state.pend.filter((p) => p.kind === 'pend' && p.root === 0).length;
@@ -1630,53 +1803,192 @@ function gemKeyFromFile(m) {
 // Repartition metal / pavage / centre, a l'ouverture de la piece.
 // Pierre de CENTRE : les plus grosses pierres, si elles depassent nettement
 // le pavage (taille >= 2,2 x la mediane et >= 55 % de la plus grosse).
-const looks = { parts: [], center: false, roots: [], half: 0.003 };
-function setupLooks() {
-  const roots = state.pieceR ? [state.piece, state.pieceR] : [state.piece];
-  const list = [];
-  state.piece.updateMatrixWorld(true);
-  const inv = state.piece.matrixWorld.clone().invert();
-  const box = new THREE.Box3();
-  state.piece.traverse((o) => {
-    if (!o.isMesh) return;
-    const m = o.material;
-    const gem = !!m && (m.transmission > 0 || GEM_RX.test(m.name || ''));
-    // maillage sans normales (le chargeur passait alors en facettes) : on
-    // les calcule, sinon un metal de la bibliotheque sortirait noir
-    if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
-    o.geometry.computeBoundingBox();
-    const bb = o.geometry.boundingBox.clone().applyMatrix4(inv.clone().multiply(o.matrixWorld));
-    box.union(bb);
-    list.push({ gem, size: bb.getSize(new THREE.Vector3()).length(), orig: m });
+const looks = { parts: [], center: false, roots: [], half: 0.003, overrides: {} };
+
+// ---- pierres : decoupage en pierres (composantes connexes) -------------
+// Un maillage peut contenir TOUT le pavage (calque joint) ou le pavage ET le
+// centre : on separe chaque pierre (sommets soudes par position), puis on
+// regroupe par role. v1.7 classait par MAILLAGE : un pavage joint, plus grand
+// que la pierre de centre, devenait "centre".
+function components(geo, M) {
+  const pos = geo.attributes.position, idx = geo.index;
+  const nT = (idx ? idx.count : pos.count) / 3;
+  const key = new Map(), weld = new Int32Array(pos.count);
+  const v = new THREE.Vector3();
+  geo.computeBoundingBox();
+  const q = Math.max(1e-7, geo.boundingBox.getSize(v).length() * 1e-5);
+  for (let i = 0; i < pos.count; i++) {
+    const k = Math.round(pos.getX(i) / q) + ',' + Math.round(pos.getY(i) / q) + ',' + Math.round(pos.getZ(i) / q);
+    let id = key.get(k); if (id === undefined) { id = key.size; key.set(k, id); }
+    weld[i] = id;
+  }
+  const par = new Int32Array(key.size).map((_, i) => i);
+  const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  const tri = (t, j) => weld[idx ? idx.getX(3 * t + j) : 3 * t + j];
+  for (let t = 0; t < nT; t++) {
+    const a = find(tri(t, 0)), b = find(tri(t, 1)), c = find(tri(t, 2));
+    par[b] = a; par[find(c)] = a;
+  }
+  const groups = new Map();
+  for (let t = 0; t < nT; t++) {
+    const r = find(tri(t, 0));
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(t);
+  }
+  const vi = (t, j) => (idx ? idx.getX(3 * t + j) : 3 * t + j);
+  return [...groups.values()].map((tris) => {
+    const bb = new THREE.Box3(); const P = [];
+    for (const t of tris) for (let j = 0; j < 3; j++) { v.fromBufferAttribute(pos, vi(t, j)).applyMatrix4(M); bb.expandByPoint(v); P.push(v.clone()); }
+    return { tris, bb, size: bb.getSize(new THREE.Vector3()).length(), P };
   });
-  const sizes = list.filter((x) => x.gem).map((x) => x.size).sort((a, b) => a - b);
+}
+// pierre taillee reconnue a sa forme : convexe, une grande facette plane
+// (la table, >= 12 % de la surface), au moins 8 orientations de facettes,
+// pas allongee. Sert quand le calque d'une pierre n'a pas de nom de pierre.
+function gemLike(comp) {
+  const P = comp.P, n = P.length / 3;
+  if (n < 8 || n > 4000) return false;
+  const s = comp.bb.getSize(new THREE.Vector3()).toArray().sort((a, b) => a - b);
+  if (s[0] <= 0 || s[2] / s[0] > 4 || s[2] > 0.03) return false;
+  const c = comp.bb.getCenter(new THREE.Vector3());
+  const tol = comp.size * 0.02;
+  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), nn = new THREE.Vector3();
+  const bins = new Map(); let area = 0;
+  const step = Math.max(1, Math.floor(P.length / 300));
+  for (let t = 0; t < n; t++) {
+    const a = P[3 * t], b = P[3 * t + 1], d = P[3 * t + 2];
+    nn.crossVectors(ab.subVectors(b, a), ac.subVectors(d, a));
+    const A = nn.length() / 2; if (A <= 0) continue;
+    nn.normalize();
+    if (nn.dot(ab.subVectors(a, c)) < 0) nn.negate();
+    // convexite (echantillonnee) : aucun sommet devant le plan de la facette
+    for (let k = 0; k < P.length; k += step) if (nn.dot(ab.subVectors(P[k], a)) > tol) return false;
+    const key = Math.round(nn.x * 30) + ',' + Math.round(nn.y * 30) + ',' + Math.round(nn.z * 30);
+    bins.set(key, (bins.get(key) || 0) + A); area += A;
+  }
+  if (bins.size < 8 || area <= 0) return false;
+  let best = null, bA = 0;
+  for (const [k2, A] of bins) if (A > bA) { bA = A; best = k2; }
+  if (bA / area < 0.12) return false;
+  // une pierre a une colette (ou une arete) en face de la table ; un rivet,
+  // un cylindre ont deux faces planes paralleles : ce ne sont pas des pierres
+  const opp = best.split(',').map((x) => -Number(x)).join(',');
+  return (bins.get(opp) || 0) < 0.3 * bA;
+}
+const CENTER_RX = /centre|center|ctr|princip/i;
+function subGeometry(geo, tris) {
+  const g = new THREE.BufferGeometry();
+  const idx = geo.index;
+  for (const [name, att] of Object.entries(geo.attributes)) {
+    const out = new Float32Array(tris.length * 3 * att.itemSize);
+    let o = 0;
+    for (const t of tris) for (let j = 0; j < 3; j++) {
+      const i = idx ? idx.getX(3 * t + j) : 3 * t + j;
+      for (let k = 0; k < att.itemSize; k++) out[o++] = att.array[i * att.itemSize + k];
+    }
+    g.setAttribute(name, new THREE.BufferAttribute(out, att.itemSize));
+  }
+  return g;
+}
+// a l'ouverture : chaque maillage -> parts (metal / pierre) ; un maillage
+// melant pavage et centre est COUPE en deux maillages.
+function prepareParts() {
+  const piece = state.piece;
+  piece.updateMatrixWorld(true);
+  const inv = piece.matrixWorld.clone().invert();
+  const meshes = []; piece.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  const items = [];
+  const box = new THREE.Box3();
+  for (const o of meshes) {
+    if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+    const m = o.material;
+    const named = !!m && (m.transmission > 0 || GEM_RX.test(m.name || ''));
+    const M = inv.clone().multiply(o.matrixWorld);
+    o.geometry.computeBoundingBox();
+    box.union(o.geometry.boundingBox.clone().applyMatrix4(M));
+    let comps = null;
+    try { comps = components(o.geometry, M); } catch (e) { comps = null; }
+    if (!comps || comps.length > 5000) { items.push({ o, comps: null, gem: named, size: 0 }); continue; }
+    for (const c of comps) c.gem = named || gemLike(c);
+    items.push({ o, comps, named });
+  }
+  const sizes = [];
+  for (const it of items) if (it.comps) for (const c of it.comps) if (c.gem) sizes.push(c.size);
+  sizes.sort((a, b) => a - b);
   const maxS = sizes.length ? sizes[sizes.length - 1] : 0, med = sizes.length ? sizes[Math.floor(sizes.length / 2)] : 0;
-  looks.center = (sizes.length > 1 && maxS >= 2.2 * med) || sizes.length === 1;
-  looks.parts = list.map((x) => ({ ...x, role: !x.gem ? 'metal' : (looks.center && x.size >= 0.55 * maxS ? 'center' : 'pave') }));
-  looks.roots = roots;
-  // demi-largeur du jonc le long du doigt (axe Y de la piece) : ombre portee
+  const bySize = (sizes.length > 1 && maxS >= 1.8 * med) || sizes.length === 1;
+  const anyNamed = items.some((it) => CENTER_RX.test((it.o.name || '') + ' ' + ((it.o.material && it.o.material.name) || '')));
+  for (const it of items) {
+    if (!it.comps) continue;
+    const nm = CENTER_RX.test((it.o.name || '') + ' ' + ((it.o.material && it.o.material.name) || ''));
+    for (const c of it.comps) {
+      c.role = !c.gem ? 'metal' : (anyNamed ? (nm ? 'center' : 'pave') : (bySize && c.size >= 0.55 * maxS ? 'center' : 'pave'));
+    }
+    const roles = new Set(it.comps.map((c) => c.role));
+    if (roles.size > 1) {
+      // maillage mixte : un sous-maillage par role
+      for (const r of roles) {
+        const tris = [].concat(...it.comps.filter((c) => c.role === r).map((c) => c.tris));
+        const sub = new THREE.Mesh(subGeometry(it.o.geometry, tris), it.o.material);
+        sub.name = (it.o.name || 'part') + '_' + r;
+        sub.userData.role = r;
+        it.o.add(sub);
+      }
+      it.o.userData.split = true;
+      it.o.geometry = new THREE.BufferGeometry();      // vide : remplace par ses sous-maillages
+    } else {
+      it.o.userData.role = [...roles][0] || 'metal';
+    }
+  }
+  for (const it of items) if (!it.comps) it.o.userData.role = it.gem ? 'pave' : 'metal';
+  // liste ordonnee des parts (ordre de parcours, identique dans le clone)
+  const parts = [];
+  piece.traverse((o) => {
+    if (!o.isMesh || o.userData.split) return;
+    o.geometry.computeBoundingSphere();
+    const sz = (o.geometry.boundingSphere ? o.geometry.boundingSphere.radius : 0) * o.matrixWorld.getMaxScaleOnAxis();
+    parts.push({ role: o.userData.role || 'metal', orig: o.material, name: o.name, size: sz });
+  });
+  looks.parts = parts;
+  looks.center = parts.some((p) => p.role === 'center');
   looks.half = Math.max(0.0015, Math.min(0.012, Math.min(Math.abs(box.min.y), Math.abs(box.max.y))));
+  // corrections faites a la main (toucher une pierre) pour CETTE piece
+  try { looks.overrides = JSON.parse(localStorage.getItem('msk_wv_roles:' + state.info.name) || '{}'); } catch (e) { looks.overrides = {}; }
+  for (const [i, r] of Object.entries(looks.overrides)) if (parts[i]) parts[i].role = r;
+  looks.center = parts.some((p) => p.role === 'center');
+}
+function setupLooks() {
+  looks.roots = state.pieceR ? [state.piece, state.pieceR] : [state.piece];
   applyLooks();
 }
 function applyLooks() {
   if (!state.piece || !looks.parts.length) return;
   const cache = new Map();
-  const get = (part) => {
+  const hd = S.quality === 'hd';
+  const get = (part, geo) => {
     const sel = part.role === 'metal' ? S.matMetal : part.role === 'center' ? S.matCenter : S.matPave;
-    const k = part.role + ':' + (sel === 'file' ? 'file:' + (part.orig ? part.orig.uuid : '') : sel);
+    const gk = sel === 'file' ? gemKeyFromFile(part.orig) : sel;
+    // pierre HD : une matiere par forme de pierre (son arbre de lancer de rayons)
+    const k = part.role + ':' + (sel === 'file' ? 'file:' + (part.orig ? part.orig.uuid : '') : sel)
+      + (hd && part.role !== 'metal' ? ':' + geo.uuid : '');
     if (!cache.has(k)) {
-      cache.set(k, part.role === 'metal' ? metalMaterial(sel, part.orig)
-        : gemMaterial(sel === 'file' ? gemKeyFromFile(part.orig) : sel));
+      let m;
+      if (part.role === 'metal') m = metalMaterial(sel, part.orig);
+      else if (hd) { try { m = gemMaterialHD(gk, geo); } catch (e) { m = gemMaterial(gk); } }
+      else m = gemMaterial(gk);
+      cache.set(k, m);
     }
     return cache.get(k);
   };
   for (const root of looks.roots) {
     let i = 0;
     root.traverse((o) => {
-      if (!o.isMesh) return;
+      if (!o.isMesh || o.userData.split) return;
       const part = looks.parts[i++];
       if (!part) return;
-      o.material = get(part);
+      o.material = get(part, o.geometry);
+      o.onBeforeRender = o.material.userData.hd ? hdBeforeRender : () => {};
+      o.userData.partIndex = i - 1;
       o.renderOrder = 1;
     });
   }
@@ -1702,7 +2014,7 @@ function updateGemUniforms() {
     }
     root.traverse((o) => {
       const m = o.material;
-      if (!o.isMesh || !m || !m.uniforms || !m.uniforms.uCenter) return;
+      if (!o.isMesh || !m || !m.uniforms || !m.uniforms.uCenter || m.userData.hd) return;
       if (earMode) {
         o.onBeforeRender = () => { m.uniforms.uMode.value = 1; m.uniforms.uFront.value.copy(front); m.uniformsNeedUpdate = true; };
       } else {
@@ -1710,6 +2022,179 @@ function updateGemUniforms() {
       }
     });
   });
+}
+
+// Correction a la main : MATIERES > "Corriger" puis toucher une pierre ou
+// une partie : metal -> pavage -> centre -> metal. Garde pour cette piece.
+const rayc = new THREE.Raycaster();
+function onTapPart(ev) {
+  if (!state.fixRoles || !state.piece) return false;
+  const r = canvas.getBoundingClientRect();
+  let u = (ev.clientX - r.left) / r.width; const v = (ev.clientY - r.top) / r.height;
+  if (state.mirrored) u = 1 - u;
+  rayc.setFromCamera(new THREE.Vector2(u * 2 - 1, 1 - v * 2), camera);
+  const hits = rayc.intersectObjects(looks.roots, true).filter((h) => h.object.isMesh && h.object.userData.partIndex !== undefined);
+  if (!hits.length) { flash('Rien ici : touchez une pierre ou le metal'); return true; }
+  const k = hits[0].object.userData.partIndex;
+  const order = ['metal', 'pave', 'center'];
+  const next = order[(order.indexOf(looks.parts[k].role) + 1) % 3];
+  // meme matiere d'origine = meme famille : on corrige toutes les pieces jumelles
+  const orig = looks.parts[k].orig;
+  looks.parts.forEach((p, i) => {
+    const ref = looks.parts[k];
+    if (i === k || (p.orig === orig && p.role === ref.role && ref.size > 0 && Math.abs(p.size / ref.size - 1) < 0.15)) {
+      p.role = next; looks.overrides[i] = next;
+    }
+  });
+  try { localStorage.setItem('msk_wv_roles:' + state.info.name, JSON.stringify(looks.overrides)); } catch (e) { /* ignore */ }
+  looks.center = looks.parts.some((p) => p.role === 'center');
+  applyLooks();
+  flash({ metal: 'Metal', pave: 'Pierre de pavage', center: 'Pierre de centre' }[next]);
+  return true;
+}
+
+// ------------------------------------------------------------ JOAILLERIE HD
+// Pierres en LANCER DE RAYONS dans leur vraie taille (comme KeyShot) : le
+// rayon entre par la facette, rebondit sur les facettes du pavillon (arbre
+// BVH de la pierre, three-mesh-bvh), ressort ; dispersion par canal (feu),
+// absorption de la couleur selon le chemin parcouru dans la pierre.
+// Metal : reflets nets du studio ; eclat (glare) sur les points les plus
+// lumineux. Repli automatique sur le rendu rapide si le telephone refuse.
+const gemHDVS = `
+varying vec3 vW; varying vec3 vN;
+void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vN = normalize(mat3(modelMatrix) * normal);
+  gl_Position = projectionMatrix * viewMatrix * w; }`;
+// bibliotheque chargee a part : si elle manque (reseau), la page marche
+// quand meme, en rendu rapide
+let BVHLIB = null;
+import('three-mesh-bvh').then((m) => { BVHLIB = m; if (state.piece) applyLooks(); }).catch(() => { BVHLIB = false; });
+const gemHDFS = () => `
+precision highp isampler2D; precision highp usampler2D;
+${BVHLIB.BVHShaderGLSL.common_functions}
+${BVHLIB.BVHShaderGLSL.bvh_struct_definitions}
+${BVHLIB.BVHShaderGLSL.bvh_ray_functions}
+uniform BVH bvh; uniform samplerCube envMap; uniform mat4 invM; uniform mat4 fwdM;
+uniform vec3 tint; uniform float ior; uniform float spread; uniform float uSize; uniform float opaque; uniform float brill;
+varying vec3 vW; varying vec3 vN;
+vec3 envc(vec3 d) { return textureCube(envMap, d).rgb; }
+// renvoie la couleur vue par un rayon qui entre dans la pierre
+vec3 traceIn(vec3 V, vec3 N, float n) {
+  vec3 rd = refract(V, N, 1.0 / n);
+  vec3 ro = (invM * vec4(vW, 1.0)).xyz;
+  vec3 r = normalize((invM * vec4(rd, 0.0)).xyz);
+  ro += r * uSize * 0.002;
+  float path = 0.0;
+  for (int i = 0; i < 7; i++) {
+    uvec4 fi = uvec4(0u); vec3 fn = vec3(0.0, 0.0, 1.0); vec3 bc = vec3(0.0); float side = 1.0; float dist = 0.0;
+    bool hit = bvhIntersectFirstHit(bvh, ro, r, fi, fn, bc, side, dist);
+    if (!hit) break;
+    path += dist;
+    vec3 hp = ro + r * dist;
+    vec3 t = refract(r, fn, n);
+    if (dot(t, t) > 0.0) { r = t; break; }
+    r = reflect(r, fn);
+    ro = hp + r * uSize * 0.002;
+  }
+  vec3 w = normalize((fwdM * vec4(r, 0.0)).xyz);
+  vec3 c = envc(w);
+  // absorption : couleur d'autant plus profonde que le chemin est long
+  vec3 a = pow(max(tint, vec3(0.002)), vec3(clamp(path / uSize, 0.0, 6.0) * 0.9));
+  return c * a;
+}
+void main() {
+  vec3 N = normalize(cross(dFdx(vW), dFdy(vW)));
+  vec3 V = normalize(vW - cameraPosition);
+  if (dot(N, V) > 0.0) N = -N;
+  float c = clamp(dot(-V, N), 0.0, 1.0);
+  float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+  float F = f0 + (1.0 - f0) * pow(1.0 - c, 5.0);
+  vec3 refl = envc(reflect(V, N));
+  vec3 col;
+  if (opaque > 1.5) { col = tint * textureCube(envMap, N, 6.0).rgb * 0.9 + refl * (0.06 + 0.5 * F); }
+  else if (opaque > 0.5) { col = tint * textureCube(envMap, N, 6.0).rgb + refl * max(F, 0.08) * (opaque > 0.95 ? 1.0 : 1.6); }
+  else {
+    vec3 I;
+    if (spread > 0.0) I = vec3(traceIn(V, N, ior - spread).r, traceIn(V, N, ior).g, traceIn(V, N, ior + spread).b);
+    else I = traceIn(V, N, ior);
+    I = pow(I, vec3(1.45)) * brill;               // contraste du feu : facettes sombres / eclats
+    col = I * (1.0 - F) + refl * F;
+  }
+  gl_FragColor = vec4(col, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`;
+const bvhCache = new Map();
+function gemMaterialHD(key, geo) {
+  if (!BVHLIB) return gemMaterial(key);                 // pas (encore) chargee
+  const g = GEMS[key] || GEMS.dia;
+  let u = bvhCache.get(geo);
+  if (!u) {
+    // l'arbre peut reordonner les triangles : sans effet sur l'affichage
+    const bvh = new BVHLIB.MeshBVH(geo, { maxLeafTris: 4 });
+    u = new BVHLIB.MeshBVHUniformStruct(); u.updateFrom(bvh); bvhCache.set(geo, u);
+  }
+  geo.computeBoundingSphere();
+  const m = new THREE.ShaderMaterial({ vertexShader: gemHDVS, fragmentShader: gemHDFS(), uniforms: {
+    bvh: { value: u }, envMap: { value: cubeRT.texture }, invM: { value: new THREE.Matrix4() }, fwdM: { value: new THREE.Matrix4() },
+    tint: { value: new THREE.Color().setRGB(...g[1]) }, ior: { value: g[2] }, spread: { value: g[3] },
+    uSize: { value: Math.max(1e-6, geo.boundingSphere.radius * 2) }, opaque: { value: g[4] },
+    brill: { value: key === 'dia' ? 1.15 : 1.5 } } });
+  m.userData.gem = key; m.userData.hd = true;
+  return m;
+}
+function hdBeforeRender(renderer, scene, cam, geo, mat) {
+  if (!mat.userData.hd) return;
+  mat.uniforms.invM.value.copy(this.matrixWorld).invert();
+  mat.uniforms.fwdM.value.copy(this.matrixWorld);
+  mat.uniformsNeedUpdate = true;
+}
+
+// ECLAT (glare, comme le "bloom" de KeyShot) : la piece seule est rendue
+// en quart de resolution, on garde ce qui depasse le blanc (reflets des
+// boites a lumiere, eclats des pierres), on le floute et on l'AJOUTE a
+// l'image. La video n'est jamais touchee.
+const glare = { ok: false };
+function setupGlare() {
+  try {
+    const mk = () => new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType });
+    glare.src = mk(); glare.a = mk(); glare.b = mk();
+    const quad = (fs, uniforms, extra = {}) => new FullScreenQuad(new THREE.ShaderMaterial({ uniforms, depthTest: false, depthWrite: false,
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }', fragmentShader: fs, ...extra }));
+    glare.th = quad(`uniform sampler2D t; varying vec2 vUv; void main() { vec3 c = texture2D(t, vUv).rgb;
+      float l = max(c.r, max(c.g, c.b)); gl_FragColor = vec4(c * max(l - 2.2, 0.0) / max(l, 1e-4), 1.0); }`, { t: { value: null } });
+    const blurFS = `uniform sampler2D t; uniform vec2 d; varying vec2 vUv;
+      void main() { vec3 c = texture2D(t, vUv).rgb * 0.2270;
+        c += (texture2D(t, vUv + d * 1.3846).rgb + texture2D(t, vUv - d * 1.3846).rgb) * 0.3162;
+        c += (texture2D(t, vUv + d * 3.2308).rgb + texture2D(t, vUv - d * 3.2308).rgb) * 0.0703;
+        gl_FragColor = vec4(c, 1.0); }`;
+    glare.bl = quad(blurFS, { t: { value: null }, d: { value: new THREE.Vector2() } });
+    glare.add = quad(`uniform sampler2D t; uniform float k; varying vec2 vUv; void main() { vec3 c = texture2D(t, vUv).rgb * k;
+      gl_FragColor = vec4(c / (1.0 + c), 1.0); }`, { t: { value: null }, k: { value: 0.45 } },
+      { blending: THREE.AdditiveBlending, transparent: true });
+    glare.ok = true;
+  } catch (e) { glare.ok = false; }
+}
+const _sz = new THREE.Vector2();
+function renderFrame() {
+  renderer.render(scene, camera);
+  if (!glare.ok || !S.glare || !state.piece) return;
+  renderer.getDrawingBufferSize(_sz);
+  const w = Math.max(4, Math.round(_sz.x / 4)), h = Math.max(4, Math.round(_sz.y / 4));
+  if (glare.src.width !== w || glare.src.height !== h) { glare.src.setSize(w, h); glare.a.setSize(w, h); glare.b.setSize(w, h); }
+  const bg = scene.background, ac = renderer.autoClear;
+  scene.background = null; renderer.setClearColor(0x000000, 1);
+  renderer.setRenderTarget(glare.src); renderer.clear(); renderer.render(scene, camera);
+  scene.background = bg;
+  glare.th.material.uniforms.t.value = glare.src.texture; renderer.setRenderTarget(glare.a); glare.th.render(renderer);
+  for (let i = 0; i < 1; i++) {
+    glare.bl.material.uniforms.t.value = glare.a.texture; glare.bl.material.uniforms.d.value.set((1 + i) / w, 0);
+    renderer.setRenderTarget(glare.b); glare.bl.render(renderer);
+    glare.bl.material.uniforms.t.value = glare.b.texture; glare.bl.material.uniforms.d.value.set(0, (1 + i) / h);
+    renderer.setRenderTarget(glare.a); glare.bl.render(renderer);
+  }
+  renderer.setRenderTarget(null); renderer.autoClear = false;
+  glare.add.material.uniforms.t.value = glare.a.texture; glare.add.render(renderer);
+  renderer.autoClear = ac;
 }
 
 // ------------------------------------------------------------ OMBRE DE CONTACT
@@ -1894,35 +2379,41 @@ async function startCamera() {
 }
 
 async function startTracker() {
-  const face = isEar();
-  if (face ? state.faceLm : state.landmarker) return true;
-  setStatus(face ? 'Chargement du suivi du visage...' : 'Chargement du suivi de la main...');
+  const face = isFaceType(), body = isNeck();
+  if ((face ? state.faceLm : state.landmarker) && (!body || state.poseLm)) return true;
+  setStatus(body ? 'Chargement du suivi du visage et du buste...' : face ? 'Chargement du suivi du visage...' : 'Chargement du suivi de la main...');
   try {
     if (!state.mp) {
       state.mp = await import(CFG.mpBundle);
       state.files = await state.mp.FilesetResolver.forVisionTasks(CFG.mpWasm);
     }
     const mp = state.mp, files = state.files;
-    const make = face
-      ? (delegate) => mp.FaceLandmarker.createFromOptions(files, {
+    const two = async (make) => { try { return await make('GPU'); } catch (e) { return make('CPU'); } };
+    if (face && !state.faceLm) {
+      state.faceLm = await two((delegate) => mp.FaceLandmarker.createFromOptions(files, {
         baseOptions: { modelAssetPath: CFG.mpFaceModel, delegate },
         runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: false,
-        minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5 })
-      : (delegate) => mp.HandLandmarker.createFromOptions(files, {
+        minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5 }));
+    }
+    if (body && !state.poseLm) {
+      state.poseLm = await two((delegate) => mp.PoseLandmarker.createFromOptions(files, {
+        baseOptions: { modelAssetPath: CFG.mpPoseModel, delegate },
+        runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5 }));
+    }
+    if (!face && !state.landmarker) {
+      state.landmarker = await two((delegate) => mp.HandLandmarker.createFromOptions(files, {
         baseOptions: { modelAssetPath: CFG.mpModel, delegate },
         runningMode: 'VIDEO', numHands: 1,
-        minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5 });
-    let lm;
-    try { lm = await make('GPU'); } catch (e) { lm = await make('CPU'); }
-    if (face) state.faceLm = lm; else state.landmarker = lm;
+        minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5 }));
+    }
     setStatus(showMsg());
     return true;
   } catch (e) {
-    setStatus((face ? 'Suivi du visage' : 'Suivi de la main') + ' indisponible (' + (e.message || e) + '). Verifiez la connexion internet du telephone.');
+    setStatus((body ? 'Suivi du buste' : face ? 'Suivi du visage' : 'Suivi de la main') + ' indisponible (' + (e.message || e) + '). Verifiez la connexion internet du telephone.');
     return false;
   }
 }
-const showMsg = () => (isEar() ? 'Montrez votre visage a la camera.' : 'Montrez votre main a la camera.');
+const showMsg = () => (isNeck() ? 'Montrez votre visage ET vos epaules a la camera.' : isEar() ? 'Montrez votre visage a la camera.' : 'Montrez votre main a la camera.');
 
 // ------------------------------------------------------------ mode demo
 function demoFrame(t) {
@@ -2022,13 +2513,13 @@ function frame() {
   const t = now / 1000;
   const dt = Math.min(0.05, t - state.lastT);
   state.lastT = t;
-  if (state.paused) { renderer.render(scene, camera); return; }
-  if (isEar()) faceStep(t, now); else handStep(t, now);
+  if (state.paused) { renderFrame(); return; }
+  if (isNeck()) neckStep(t, now); else if (isEar()) faceStep(t, now); else handStep(t, now);
   stepPendulums(dt);
   estimateLight(t);
   updateGemUniforms();
   updateShadow();
-  renderer.render(scene, camera);
+  renderFrame();
 
   state.frames++;
   if (now - state.fpsT > 1000) {
@@ -2109,6 +2600,116 @@ function faceStep(t, now) {
   }
 }
 
+// ------------------------------------------------------------ COLLIERS
+// Visage (distance, haut du cou) + buste MediaPipe Pose (epaules) ->
+// repere du buste lisse -> nuque et fourchette sternale -> collier.
+const bodyPipe = new W.BodyPipeline();
+const neckOcc = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 32, 1, false), matHide);
+const torsoOcc = new THREE.Mesh(sphGeo, matHide);
+for (const m of [neckOcc, torsoOcc]) { m.renderOrder = -1; scene.add(m); m.visible = false; }
+function demoBody(t) {
+  const cam = W.camTangents(currentHfov(), camera.aspect);
+  const by = 0.25 * Math.sin(t * 0.4), hy = window.__demoYaw ? window.__demoYaw(t) * Math.PI / 180 : 0.4 * Math.sin(t * 0.7);
+  const rot = (a, axis) => (axis === 'y' ? [[Math.cos(a), 0, Math.sin(a)], [0, 1, 0], [-Math.sin(a), 0, Math.cos(a)]]
+    : [[1, 0, 0], [0, Math.cos(a), -Math.sin(a)], [0, Math.sin(a), Math.cos(a)]]);
+  const mm = (A, B) => A.map((r, i) => B[0].map((_, j) => r.reduce((s, _x, k) => s + A[i][k] * B[k][j], 0)));
+  const mv = (R, v) => [0, 1, 2].map((i) => R[i][0] * v[0] + R[i][1] * v[1] + R[i][2] * v[2]);
+  const pr = (p) => ({ x: 0.5 + (p[0] / -p[2]) / (2 * cam.tanH), y: 0.5 - (p[1] / -p[2]) / (2 * cam.tanV), z: 0 });
+  const Rb = rot(by, 'y'), T = [0, -0.13, -(parseFloat(qs.get('demoz')) || 0.55)];
+  const Rh = mm(Rb, mm(rot(hy, 'y'), rot(0.08 * Math.sin(t), 'x')));
+  const pivot = W.add(T, mv(Rb, [0, 0.20, 0.005]));
+  const Th = W.sub(pivot, mv(Rh, [0, -0.115, -0.04]));
+  const face = [];
+  W.FACE_IDX.forEach((i, k) => { face[i] = pr(W.add(mv(Rh, W.FACE_CANON[k].map((v) => v / 100)), Th)); });
+  const L = W.add(mv(Rb, [0.18, 0, 0]), T), R = W.add(mv(Rb, [-0.18, 0, 0]), T);
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0 })), world = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0 }));
+  pose[11] = pr(L); pose[12] = pr(R); world[11].z = -L[2] + T[2]; world[12].z = -R[2] + T[2];
+  return { face, pose, world };
+}
+function neckStep(t, now) {
+  ears.forEach((e) => { e.g.visible = false; });
+  ghost.visible = false;
+  let face = null, pose = null, world = null, none = false;
+  if (DEMO) { const d = demoBody(t); face = d.face; pose = d.pose; world = d.world; }
+  else if (state.faceLm && state.poseLm && newVideoFrame()) {
+    let rf = null, rp = null;
+    try { rf = state.faceLm.detectForVideo(video, now); } catch (e) { rf = null; }
+    try { rp = state.poseLm.detectForVideo(video, now); } catch (e) { rp = null; }
+    if (rf && rf.faceLandmarks && rf.faceLandmarks.length) face = rf.faceLandmarks[0];
+    if (rp && rp.landmarks && rp.landmarks.length) { pose = rp.landmarks[0]; world = rp.worldLandmarks && rp.worldLandmarks[0]; }
+    if (rf && rp && (!face || !pose)) none = true;
+  }
+  if (face && pose) {
+    const cam = W.camTangents(currentHfov(), camera.aspect);
+    const head = facePipe.process(face, t, cam, S.headScale, S.faceCanon);
+    if (head) {
+      state.lastPose = head;
+      const body = bodyPipe.process(pose, world, head, cam, t, S.headScale, { notch: S.notchCal });
+      state.lastBody = body;
+      state.lastHand = t;
+      placeNecklace(body, head);
+      $('hand').textContent = `buste - ${(-body.mid[2] * 100).toFixed(0)} cm`;
+      if (state.started && !DEMO) setStatus('');
+    }
+  } else if ((none || (!face && !pose && !DEMO && state.faceLm)) && t - state.lastHand > 0.5) {
+    anchor.visible = false; headG.visible = false; neckOcc.visible = false; torsoOcc.visible = false;
+    facePipe.reset(); bodyPipe.reset(); state.pend.forEach((p) => p.sim.reset());
+    $('hand').textContent = face ? 'epaules non vues' : 'aucun visage';
+    if (state.started && !DEMO) setStatus(showMsg());
+  }
+}
+function placeNecklace(body, head) {
+  const b = { ...body };
+  // retouches manuelles (mm) : hauteur / avant-arriere du collier
+  const off = W.add(W.mul(body.Y, S.neckDy / 1000), W.mul(body.Z, S.neckDz / 1000));
+  b.nape = W.add(body.nape, off); b.notch = W.add(body.notch, off);
+  const p = W.necklacePose(b, state.neckGeom);
+  _m4.makeBasis(new THREE.Vector3(...p.X), new THREE.Vector3(...p.Y), new THREE.Vector3(...p.Z));
+  anchor.quaternion.setFromRotationMatrix(_m4);
+  anchor.position.set(...p.pos);
+  flipper.rotation.set(0, S.flipHead ? Math.PI : 0, 0);
+  anchor.visible = !!state.piece;
+  // masques : cou (cylindre), buste (ellipsoide en retrait), tete
+  const mat = ghostMaterial();
+  const top = W.faceToCamera(head, [0, -11.5, -4.0], S.headScale);
+  const base = W.sub(body.neckBase, W.mul(body.Y, 0.02));
+  const ax = W.sub(top, base), L = W.len(ax);
+  const r = S.neckMm / 1000 / (2 * Math.PI) * 0.94;
+  neckOcc.material = mat; neckOcc.position.set(...W.mul(W.add(top, base), 0.5));
+  neckOcc.quaternion.setFromUnitVectors(UP, new THREE.Vector3(...ax).normalize());
+  neckOcc.scale.set(r, L, r * 0.92); neckOcc.visible = true;
+  torsoOcc.material = mat;
+  torsoOcc.position.set(...W.add(W.sub(body.mid, W.mul(body.Y, 0.16)), W.mul(body.Z, -0.015)));
+  _m4.makeBasis(new THREE.Vector3(...body.X), new THREE.Vector3(...body.Y), new THREE.Vector3(...body.Z));
+  torsoOcc.quaternion.setFromRotationMatrix(_m4);
+  torsoOcc.scale.set(Math.max(0.12, body.W / 2 * 1.02), 0.22, 0.075);
+  torsoOcc.visible = true;
+  // tete (cache l'arriere de la chaine) : memes volumes que pour les boucles
+  const R = head.R, T = head.T, k = S.headScale;
+  _hm.set(R[0][0] * k, R[0][1] * k, R[0][2] * k, T[0], R[1][0] * k, R[1][1] * k, R[1][2] * k, T[1],
+    R[2][0] * k, R[2][1] * k, R[2][2] * k, T[2], 0, 0, 0, 1);
+  headG.matrix.copy(_hm); headG.matrixWorldNeedsUpdate = true;
+  headOcc.material = mat; neckOcc0.material = mat; neckOcc0.visible = false; headG.visible = true;
+}
+// calage : toucher la fourchette sternale (le creux a la base du cou)
+function tapNotch(ev) {
+  const b = state.lastBody; if (!b) return false;
+  const r = canvas.getBoundingClientRect();
+  let u = (ev.clientX - r.left) / r.width; const v = (ev.clientY - r.top) / r.height;
+  if (state.mirrored) u = 1 - u;
+  const cam = W.camTangents(currentHfov(), camera.aspect);
+  const d = [(u - 0.5) * 2 * cam.tanH, -(v - 0.5) * 2 * cam.tanV, -1];
+  // plan frontal passant par la fourchette actuelle
+  const n = b.Z, t = W.dot(b.notch, n) / W.dot(d, n);
+  if (!(t > 0)) return false;
+  const p = W.mul(d, t), rel = W.sub(p, b.mid);
+  const up = W.dot(rel, b.Y), side = W.dot(rel, b.X);
+  if (Math.abs(up) > 0.12 || Math.abs(side) > 0.08) return false;
+  S.notchCal = { up, side }; S.neckDy = 0; S.neckDz = 0; save();
+  for (const id of ['neckDy', 'neckDz']) { const el = $(id); if (el) { el.value = 0; el.dispatchEvent(new Event('input')); } }
+  return true;
+}
+
 const _hm = new THREE.Matrix4();
 function placeEars(pose) {
   state.lastPose = pose;
@@ -2139,14 +2740,18 @@ function placeEars(pose) {
     0, 0, 0, 1);
   headG.matrix.copy(_hm);
   headG.matrixWorldNeedsUpdate = true;
-  headOcc.material = mat; neckOcc.material = mat;
+  headOcc.material = mat; neckOcc0.material = mat; neckOcc0.visible = true;
   headG.visible = true;
 }
 
 const _m4 = new THREE.Matrix4();
 function placeAnchor(P, isRight) {
+  // bracelet : il PEND (appui sur le haut du poignet, glisse vers la main
+  // ou le coude selon la gravite). v1.7 : recul multiplie a tort par
+  // l'echelle de la main -> bracelet 2 a 3 cm trop haut sur l'avant-bras.
+  const rIn = (state.info.d_inner_mm || 60) / 2000;
   const pose = state.info.type === 'bracelet'
-    ? W.braceletPose(P, isRight, S.braceletOffset / 1000 * (state.k || 1))
+    ? W.braceletHang(P, isRight, state.gravity, W.wristEllipse(S.wristMm), rIn, S.braceletOffset / 1000)
     : W.ringPose(P, S.finger, isRight, S.along);
   _m4.makeBasis(new THREE.Vector3(...pose.X), new THREE.Vector3(...pose.Y), new THREE.Vector3(...pose.Z));
   anchor.quaternion.setFromRotationMatrix(_m4);
@@ -2197,6 +2802,13 @@ function addLobeRay(side, ray) {
   return true;
 }
 function onTapLobe(ev) {
+  if (onTapPart(ev)) { ev.preventDefault(); return; }
+  if (isNeck() && state.tapNotch) {
+    ev.preventDefault(); state.tapNotch = false; setStatus('');
+    flash(tapNotch(ev) ? 'Fourchette sternale calee' : 'Point refuse : touchez le creux a la base du cou');
+    if (state.paused) togglePause(false);
+    return;
+  }
   if (!isEar()) return;
   if (enroll.on) { enroll.tap(ev); return; }
   if (!state.tapLobe) return;
@@ -2376,6 +2988,15 @@ function buildUI() {
   bindRange('earDz', 'earDz', (v) => `${v > 0 ? '+' : ''}${v.toFixed(0)} mm`);
   bindRange('headScale', 'headScale', (v) => `x ${v.toFixed(2)}`);
   bindCheck('earMirror', 'earMirror');
+  bindRange('neckMm', 'neckMm', (v) => `${v.toFixed(0)} mm`);
+  bindRange('neckDy', 'neckDy', (v) => `${v > 0 ? '+' : ''}${v.toFixed(0)} mm`);
+  bindRange('neckDz', 'neckDz', (v) => `${v > 0 ? '+' : ''}${v.toFixed(0)} mm`);
+  $('btn-notch').addEventListener('click', () => {
+    state.tapNotch = true; document.body.classList.remove('panel-open');
+    if (!state.paused) togglePause(true);
+    setStatus('Image figee : touchez le CREUX a la base du cou (fourchette sternale).');
+  });
+  $('btn-notch-reset').addEventListener('click', () => { S.notchCal = null; save(); flash('Fourchette moyenne'); });
   $('btn-lobe').addEventListener('click', () => {
     state.tapLobe = true; document.body.classList.remove('panel-open');
     setStatus('Touchez le LOBE (point de percage) sur l\'image. Meilleur : 2 fois, tete de 3/4 puis de profil.');
@@ -2391,6 +3012,10 @@ function buildUI() {
   ew.addEventListener('change', () => { S.earWhich = ew.value; save(); });
   bindCheck('autoLight', 'autoLight', () => { light.t = 0; });
   bindCheck('shadow', 'shadow');
+  bindCheck('glare', 'glare');
+  const qs2 = $('quality'); qs2.value = S.quality;
+  qs2.addEventListener('change', () => { S.quality = qs2.value; save(); applyLooks(); });
+  setupGlare();
   buildMatSheet();
 
   // ouverture de la piece (deux boutons : ecran d'accueil et barre)
@@ -2399,7 +3024,17 @@ function buildUI() {
   }
   $('btn-start').addEventListener('click', start);
   $('btn-panel').addEventListener('click', () => { document.body.classList.remove('mats-open'); document.body.classList.toggle('panel-open'); });
-  $('btn-mats').addEventListener('click', () => { document.body.classList.remove('panel-open'); document.body.classList.toggle('mats-open'); });
+  $('btn-mats').addEventListener('click', () => { document.body.classList.remove('panel-open'); document.body.classList.toggle('mats-open');
+    if (!document.body.classList.contains('mats-open')) { state.fixRoles = false; $('btn-fix').classList.remove('on'); } });
+  $('btn-fix').addEventListener('click', () => {
+    state.fixRoles = !state.fixRoles; $('btn-fix').classList.toggle('on', state.fixRoles);
+    if (state.fixRoles) { if (!state.paused) togglePause(true); flash('Image figee : touchez une pierre ou le metal pour changer son role'); }
+    else if (state.paused) togglePause(false);
+  });
+  $('btn-fix-reset').addEventListener('click', () => {
+    try { localStorage.removeItem('msk_wv_roles:' + state.info.name); } catch (e) { /* ignore */ }
+    if (state.piece) { looks.overrides = {}; flash('Roles automatiques retablis : rouvrez la piece'); }
+  });
   $('btn-close-panel').addEventListener('click', () => document.body.classList.remove('panel-open'));
   $('btn-photo').addEventListener('click', takePhoto);
   $('btn-pause').addEventListener('click', () => togglePause(!state.paused));
@@ -2461,7 +3096,7 @@ async function main() {
   frame();
 }
 
-window.__wv = { state, S, scene, camera, anchor, ghost, W, setPiece, start, meas, ears, headG, enroll, THREE, cubeRT, gemMaterial, metalMaterial };
+window.__wv = { state, S, scene, camera, anchor, ghost, W, setPiece, start, meas, ears, headG, enroll, THREE, cubeRT, gemMaterial, metalMaterial, looks, neckOcc, torsoOcc };
 main();
 
 </script>
